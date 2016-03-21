@@ -1,4 +1,4 @@
-module Lib where
+module Lambda where
 
 {--
  Examples from "Types and Programming Languages" Benjamin Pierce.
