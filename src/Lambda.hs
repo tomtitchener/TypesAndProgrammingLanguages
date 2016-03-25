@@ -6,9 +6,11 @@ module Lambda where
  2) Untyped lambda calculus with de Bruijn presentation and full beta reduction
  --}
 
-import Data.Tuple
-import qualified Data.Set as DS
+import Data.List
 import qualified Data.Map.Strict as DM
+import qualified Data.Set as DS
+import qualified Data.Tree as DT
+import Data.Tuple
 import qualified Text.PrettyPrint.Leijen as PP
 
 -------
@@ -141,3 +143,56 @@ restoreNames (ctx, t2) = fun (-1) t2 where
   fun i (Var2 d)     = Var (ctx' DM.! (i - d))
   fun i (Abs2 t)     = Abs (ctx' DM.! (i+1)) (fun (i+1) t) 
   fun i (App2 t1 t2) = App (fun i t1) (fun i t2)
+
+
+type Γ  = DT.Tree Sym
+
+-- | Convert Term1 to Term2 for context
+-- >>> PP.pretty $ snd $ removeNames (DT.Node "" []) (Abs "x" (Var "x"))
+-- λ.0
+--
+-- >>> PP.pretty $ snd $ removeNames (DT.Node "" []) (Abs "s" (Abs "z" (Var "z")))
+-- λ.λ.0
+--
+-- >>> PP.pretty $ snd $ removeNames (DT.Node "" []) (Abs "s" (Abs "z" (App (Var "s") (App (Var "s") (Var "z")))))
+-- λ.λ.(1 (1 0))
+--
+-- >>> PP.pretty $ snd $ removeNames (DT.Node "" []) (Abs "m" (Abs "n" (Abs "s" (Abs "z" (App (Var "m") (App (Var "s") (App (Var "n") (App (Var "z") (Var "s")))))))))
+-- λ.λ.λ.λ.(3 (1 (2 (0 1))))
+--
+-- >>> PP.pretty $ snd $ removeNames (DT.Node "" []) (Abs "f" (App (Abs "x" (App (Var "f") (Abs "y" (App (App (Var "x") (Var "x")) (Var "y"))))) (Abs "x" (App (Var "f") (Abs "y" (App (App (Var "x") (Var "x")) (Var "y")))))))
+-- λ.(λ.(1 λ.((1 1) 0)) λ.(1 λ.((1 1) 0)))
+--
+removeNames :: Γ -> Term1 -> (Γ,Term2)
+removeNames = fun []
+  where
+    nullCtx :: Γ
+    nullCtx = Node "" []
+    appendCtx :: Γ -> Γ -> Γ
+    appendCtx nullCtx new = Node s ()
+    appendCtx (Node s [c]) new = 
+    fun :: [Sym] -> Γ -> Term1 -> (Γ,Term2)
+    fun path ctx (Var s)     = (nullCtx,  Var2 i)                 where i = last $ elemIndices s path
+    fun path ctx (Abs s t)   = (appendCtx ctx ctx', Abs2 t')      where (ctx', t') = fun (s:path) (DT.Node s [ctx]) t
+    fun path ctx (App t1 t2) = (appendCtx ctx ctx', App2 t1' t2') where (ctx1, t1') = fun path ctx t1; (ctx2, t2') = fun path ctx t2; ctx' = DT.Node "" [ctx1, ctx2]
+
+-- Want to construct context top down, with parallel recursive chain where you take existing context successively add
+-- lower levels with each recursive call for each term
+--
+
+-- | Convert Term2 to Term1 for context
+-- >>> (PP.pretty . restoreNames) $ removeNames (DT.Node "" []) (Abs "x" (Var "x"))
+-- λx.x
+--
+-- (PP.pretty . restoreNames) $ removeNames (DT.Node "" []) (Abs "s" (Abs "z" (Var "z")))
+-- >>> removeNames (DT.Node "" []) (Abs "s" (Abs "z" (Var "z")))
+-- λs.λz.z
+--
+restoreNames :: (Γ,Term2) -> Term1
+restoreNames = fun [] 
+  where
+    fun :: [Sym] -> (Γ,Term2) -> Term1
+    fun path (_, Var2 i)                         = Var $ path !! i
+    fun path (DT.Node s [ctx],Abs2 t)            = Abs s $ fun (path++[s]) (ctx, t)
+    fun path (DT.Node _ [ctx1, ctx2],App2 t1 t2) = App (fun path (ctx1, t1)) (fun path (ctx2, t2))
+    fun path (ctx, t)                            = error $ "restoreNames unrecognized context " ++ show ctx ++ " for term " ++ show t
