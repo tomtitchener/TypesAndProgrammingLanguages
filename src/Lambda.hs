@@ -230,3 +230,30 @@ restoreNames = fun
     fun path (Node s [ctx],Abs2 t)            = Abs s $ fun (s:path) (ctx, t)
     fun path (Node _ [ctx1, ctx2],App2 t1 t2) = App (fun path (ctx1, t1)) (fun path (ctx2, t2))
     fun path (ctx, t)                         = error $ "restoreNames unrecognized context " ++ show ctx ++ " for term " ++ show t
+
+-- | Eval of nameless terms.
+ 
+termShift :: Int -> Term2 -> Term2
+termShift d t = walk 0 t
+  where
+    walk :: Int -> Term2 -> Term2
+    walk c t'@(Var2 i) = if i >= c then (Var2 (i+d)) else t'
+    walk c (Abs2 t1) = Abs2 $ walk (c+1) t1
+    walk c (App2 t1 t2) = App2 (walk c t1) (walk c t2)
+
+termSubst :: Int -> Term2 -> Term2 -> Term2
+termSubst j s t = walk 0 t
+  where
+    walk :: Int -> Term2 -> Term2
+    walk c t'@(Var2 i)  = if i == j + c then termShift c s else t'
+    walk c (Abs2 t1)    = Abs2 $ walk (c+1) t1
+    walk c (App2 t1 t2) = App2 (walk c t1) (walk c t2)
+
+βRed2 :: Term2 -> Term2 -> Term2
+βRed2 s t = termShift (-1) (termSubst 0 (termShift 1 s) t)
+
+eval2 :: Term2 -> Term2
+eval2 (App2 t1@(Abs2 t12) v2@(Abs2 _)) = βRed2 v2 t12
+eval2 (App2 v1@(Abs2 _) t2)            = App2 v1  t2' where t2' = eval2 t2
+eval2 (App2 t1 t2)                     = App2 t1' t2  where t1' = eval2 t1
+eval2 t@_ = t
