@@ -135,16 +135,6 @@ instance Pretty Term2 where
 --   unique naming context.
 type Γ  = Tree Sym
 
--- | Fold straight list into tree with chain of single branches.
---   Used to convert indices for free vars into tree so it can
---   have tree of bound vars appended for renaming context.
---
---   >>> syms2Ctx ["l","m","n"]
---   Node {rootLabel = "l", subForest = [Node {rootLabel = "m", subForest = [Node {rootLabel = "n", subForest = [Node {rootLabel = "", subForest = []}]}]}]}
---
-syms2Ctx :: [Sym] -> Γ
-syms2Ctx = foldr (\s t -> Node s [t]) (Node "" []) 
-
 -- | Appends tree in second arg to end of straight line tree in first arg.
 --   Used a) to append bound context to end of free context, b) to build
 --   up new context for an outer Abs over an inner context.
@@ -184,33 +174,56 @@ removeNames' path (App t1 t2) = (ctx', App2 t1' t2') where (ctx1, t1') = removeN
 removeNames :: [Sym] -> Term1 -> (Γ,Term2)
 removeNames fvars t1
   | fvars `intersect` fvars' /= fvars' = error $ "removeNames not all vars free in " ++ show t1 ++ "" ++ show fvars' ++ " are included in " ++ show fvars
-  | otherwise = (appendCtxts fctx bctx, t2)
+  | otherwise = (bctx, t2)
   where
-    fvars' = freeVars t1
+    fvars'     = freeVars t1
     (bctx, t2) = removeNames' fvars t1
-    fctx = syms2Ctx fvars
                                                     
 -- | Convert Term2 to Term1 for context
--- >>> (pretty . restoreNames) $ removeNames [] (Abs "x" (Var "x"))
+-- >>> (pretty . restoreNames []) $ removeNames [] (Abs "x" (Var "x"))
 -- λx.x
 --
--- >>> (pretty . restoreNames) $ removeNames [] (Abs "s" (Abs "z" (Var "z")))
+-- >>> (pretty . restoreNames []) $ removeNames [] (Abs "s" (Abs "z" (Var "z")))
 -- λs.λz.z
 --
--- >>> (pretty . restoreNames) $ removeNames [] (Abs "s" (Abs "z" (App (Var "s") (App (Var "s") (Var "z")))))
+-- >>> (pretty . restoreNames []) $ removeNames [] (Abs "s" (Abs "z" (App (Var "s") (App (Var "s") (Var "z")))))
 -- λs.λz.(s (s z))
 --
--- >>> (pretty . restoreNames) $ removeNames [] (Abs "s" (Abs "z" (App (Var "s") (App (Var "s") (Var "z")))))
--- λs.λz.(s (s z))
---
--- >>> (pretty . restoreNames) $ removeNames [] (Abs "m" (Abs "n" (Abs "s" (Abs "z" (App (Var "m") (App (Var "s") (App (Var "n") (App (Var "z") (Var "s")))))))))
+-- >>> (pretty . restoreNames []) $ removeNames [] (Abs "m" (Abs "n" (Abs "s" (Abs "z" (App (Var "m") (App (Var "s") (App (Var "n") (App (Var "z") (Var "s")))))))))
 -- λm.λn.λs.λz.(m (s (n (z s))))
 --
--- >>> (pretty . restoreNames) $ removeNames [] (Abs "f" (App (Abs "x" (App (Var "f") (Abs "y" (App (App (Var "x") (Var "x")) (Var "y"))))) (Abs "g" (App (Var "f") (Abs "h" (App (App (Var "g") (Var "g")) (Var "h")))))))
+-- >>> (pretty . restoreNames []) $ removeNames [] (Abs "f" (App (Abs "x" (App (Var "f") (Abs "y" (App (App (Var "x") (Var "x")) (Var "y"))))) (Abs "g" (App (Var "f") (Abs "h" (App (App (Var "g") (Var "g")) (Var "h")))))))
 -- λf.(λx.(f λy.((x x) y)) λg.(f λh.((g g) h)))
---                                                    
-restoreNames :: (Γ,Term2) -> Term1
-restoreNames = fun [] 
+--
+-- >>> (Abs "x" (Var "x")) == restoreNames [] (removeNames [] (Abs "x" (Var "x")))
+-- True
+--
+-- >>> (Abs "s" (Abs "z" (Var "z"))) == restoreNames [] (removeNames [] (Abs "s" (Abs "z" (Var "z"))))
+-- True
+--    
+-- >>> (Abs "s" (Abs "z" (App (Var "s") (App (Var "s") (Var "z"))))) == restoreNames [] (removeNames [] (Abs "s" (Abs "z" (App (Var "s") (App (Var "s") (Var "z"))))))
+-- True
+--
+-- >> (Abs "m" (Abs "n" (Abs "s" (Abs "z" (App (Var "m") (App (Var "s") (App (Var "n") (App (Var "z") (Var "s"))))))))) == restoreNames [] (removeNames [] (Abs "m" (Abs "n" (Abs "s" (Abs "z" (App (Var "m") (App (Var "s") (App (Var "n") (App (Var "z") (Var "s"))))))))))
+-- True
+--    
+-- >>> (Abs "f" (App (Abs "x" (App (Var "f") (Abs "y" (App (App (Var "x") (Var "x")) (Var "y"))))) (Abs "g" (App (Var "f") (Abs "h" (App (App (Var "g") (Var "g")) (Var "h"))))))) == restoreNames [] (removeNames [] (Abs "f" (App (Abs "x" (App (Var "f") (Abs "y" (App (App (Var "x") (Var "x")) (Var "y"))))) (Abs "g" (App (Var "f") (Abs "h" (App (App (Var "g") (Var "g")) (Var "h"))))))))
+-- True
+--
+-- >>> (pretty . (restoreNames ["z"])) $ removeNames ["z"] (Abs "x" (Var "z"))
+-- λx.z
+--
+-- >>> (pretty . (restoreNames ["g"])) $ removeNames ["g"] (Abs "s" (Abs "z" (Var "g")))
+-- λs.λz.g
+--
+-- >>> (pretty . (restoreNames ["m", "n"])) $ removeNames ["m", "n"] (Abs "s" (Abs "z" (App (Var "s") (App (Var "m") (Var "n")))))
+-- λs.λz.(s (m n))
+--
+-- >>> (pretty . restoreNames ["a","b","c"]) $ removeNames ["a","b","c"] (Abs "m" (Abs "n" (Abs "s" (Abs "z" (App (Var "a") (App (Var "b") (App (Var "n") (App (Var "z") (Var "c")))))))))
+-- λm.λn.λs.λz.(a (b (n (z c))))
+--    
+restoreNames :: [Sym] -> (Γ,Term2) -> Term1
+restoreNames = fun 
   where
     fun :: [Sym] -> (Γ,Term2) -> Term1
     fun path (_, Var2 i)                      = Var $ path !! i
