@@ -1,14 +1,14 @@
 module Lambda where
-
 {--
  Examples from "Types and Programming Languages" Benjamin Pierce.
  1) Untyped lambda calculus with beta reduction "up to renaming of bound variables"
  2) Untyped lambda calculus with de Bruijn presentation and full beta reduction
  --}
 
-import Data.List                 ((\\), elemIndices, intersect, sort, head, group)
-import Data.Tree                 (Tree(..))
-import Text.PrettyPrint.Leijen   ((<>), char, int, string, pretty, Pretty(..))
+import           Data.List                     ((\\), elemIndices, intersect, sort, head, group)
+import           Data.Tree                     (Tree(..))
+import           Text.ParserCombinators.Parsec (Parser(..), (<|>), (<?>), many1, lower, char, parse, spaces, noneOf, letter, try)
+import qualified Text.PrettyPrint.Leijen as PP ((<>), char, int, string, pretty, Pretty(..))
 
 -------
 -- 1 --
@@ -24,13 +24,13 @@ data Term1 =
   deriving (Show, Eq)
 
 -- | Pretty print Term1
---  >>> pretty $ (App (Abs "x"(Var "x")) (Var "x"))
+--  >>> PP.pretty $ (App (Abs "x"(Var "x")) (Var "x"))
 --  (λx.x x)
 --
-instance Pretty Term1 where
-  pretty (Var s)     = string s
-  pretty (Abs s t)   = string "λ" <> string s <> string "." <> pretty t
-  pretty (App t1 t2) = char '(' <> pretty t1 <> string " " <> pretty t2 <> char ')'
+instance PP.Pretty Term1 where
+  pretty (Var s)     = PP.string s
+  pretty (Abs s t)   = PP.string "λ" PP.<> PP.string s PP.<> PP.string "." PP.<> PP.pretty t
+  pretty (App t1 t2) = PP.char '(' PP.<> PP.pretty t1 PP.<> PP.string " " PP.<> PP.pretty t2 PP.<> PP.char ')'
 
 unique :: (Eq a, Ord a) => [a] -> [a]
 unique = map head . group . sort
@@ -61,44 +61,44 @@ freeVars (App t1 t2) = unique $ freeVars t1 ++ freeVars t2
 βRed1 x s (App t1 t2) = App (βRed1 x s t1) (βRed1 x s t2)
 
 -- | Eval a Term1
--- >>>pretty (App (Abs "x" (Abs "y" (Var "x"))) (Abs "z" (App (Var "z") (Var "w"))))
+-- >>>PP.pretty (App (Abs "x" (Abs "y" (Var "x"))) (Abs "z" (App (Var "z") (Var "w"))))
 -- (λx.λy.x λz.(z w))
 --
--- >>>pretty . eval1 $ (App (Abs "x" (Abs "y" (Var "x"))) (Abs "z" (App (Var "z") (Var "w"))))
+-- >>>PP.pretty . eval1 $ (App (Abs "x" (Abs "y" (Var "x"))) (Abs "z" (App (Var "z") (Var "w"))))
 -- λy.λz.(z w)
 --
 -- same as [x ⟼ λz.z w] λy.x
--- >>>pretty $ βRed1 "x" (Abs "z" (App (Var "z") (Var "w"))) (Abs "y" (Var "x")) 
+-- >>>PP.pretty $ βRed1 "x" (Abs "z" (App (Var "z") (Var "w"))) (Abs "y" (Var "x")) 
 -- λy.λz.(z w)
 --
 -- Avoiding bound variables
--- >>>pretty (App (Abs "x" (Abs "x" (Var "x"))) (Var "y"))
+-- >>>PP.pretty (App (Abs "x" (Abs "x" (Var "x"))) (Var "y"))
 -- (λx.λx.x y)
 --
--- >>>pretty . eval1 $ (App (Abs "x" (Abs "x" (Var "x"))) (Var "y"))
+-- >>>PP.pretty . eval1 $ (App (Abs "x" (Abs "x" (Var "x"))) (Var "y"))
 -- λx.x
 --
 -- same as [x ⟼ y] λx.x
--- >>>pretty $ βRed1 "x" (Var "y") (Abs "x" (Var "x"))
+-- >>>PP.pretty $ βRed1 "x" (Var "y") (Abs "x" (Var "x"))
 -- λx.x
 --
 -- Avoiding variable capture
--- >>>pretty $ (App (Abs "x" (Abs "z" (Var "x"))) (Var "z"))
+-- >>>PP.pretty $ (App (Abs "x" (Abs "z" (Var "x"))) (Var "z"))
 -- (λx.λz.x z)
 --
--- >>>pretty . eval1 $ (App (Abs "x" (Abs "z" (Var "x"))) (Var "z"))
+-- >>>PP.pretty . eval1 $ (App (Abs "x" (Abs "z" (Var "x"))) (Var "z"))
 -- λz.x
 --
 -- same as [x⟼z] λz.x
--- >>>pretty $ βRed1 "x" (Var "z") (Abs "z" (Var "x"))
+-- >>>PP.pretty $ βRed1 "x" (Var "z") (Abs "z" (Var "x"))
 -- λz.x
 --
 -- but [x ⟼y z] λy.x y (page 71)
--- >>>pretty . eval1 $ (App (Abs "x" (Abs "y" (App (Var "x") (Var "y")))) (App (Var "y") (Var "z")))
+-- >>>PP.pretty . eval1 $ (App (Abs "x" (Abs "y" (App (Var "x") (Var "y")))) (App (Var "y") (Var "z")))
 -- λy.(x y)
 --
 -- same as
--- >>>pretty $ βRed1 "x" (App (Var "y") (Var "z")) (Abs "y" (App (Var "x") (Var "y")))
+-- >>>PP.pretty $ βRed1 "x" (App (Var "y") (Var "z")) (Abs "y" (App (Var "x") (Var "y")))
 -- λy.(x y)
 --
 eval1 :: Term1 -> Term1
@@ -119,13 +119,13 @@ data Term2 =
   deriving (Show, Eq)
 
 -- | Pretty print Term2
---   >>> pretty $ (App2 (Abs2 (Var2 0)) (Var2 0))
+--   >>> PP.pretty $ (App2 (Abs2 (Var2 0)) (Var2 0))
 --   (λ.0 0)
 --
-instance Pretty Term2 where
- pretty (Var2 i)     = int i
- pretty (Abs2 t)     = string "λ." <> pretty t
- pretty (App2 t1 t2) = char '(' <> pretty t1 <> string " " <>  pretty t2 <> char ')'
+instance PP.Pretty Term2 where
+ pretty (Var2 i)     = PP.int i
+ pretty (Abs2 t)     = PP.string "λ." PP.<> PP.pretty t
+ pretty (App2 t1 t2) = PP.char '(' PP.<> PP.pretty t1 PP.<> PP.string " " PP.<>  PP.pretty t2 PP.<> PP.char ')'
 
 -- | Name context in text is Gamma, but as just an ordered list where indexes match order.
 --   Consequence is need to "... make up names for for the variables bound by abstractions
@@ -151,19 +151,19 @@ appendCtxts n@_ dst                               = error $ "appendCtxts unrecog
 
 -- | Convert Term1 to Term2 for context
 --
--- >>>pretty $ snd $ removeNames [] (Abs "x" (Var "x"))
+-- >>>PP.pretty $ snd $ removeNames [] (Abs "x" (Var "x"))
 -- λ.0
 --
--- >>>pretty $ snd $ removeNames [] (Abs "s" (Abs "z" (Var "z")))
+-- >>>PP.pretty $ snd $ removeNames [] (Abs "s" (Abs "z" (Var "z")))
 -- λ.λ.0
 --
--- >>>pretty $ snd $ removeNames [] (Abs "s" (Abs "z" (App (Var "s") (App (Var "s") (Var "z")))))
+-- >>>PP.pretty $ snd $ removeNames [] (Abs "s" (Abs "z" (App (Var "s") (App (Var "s") (Var "z")))))
 -- λ.λ.(1 (1 0))
 --
--- >>>pretty $ snd $ removeNames [] (Abs "m" (Abs "n" (Abs "s" (Abs "z" (App (Var "m") (App (Var "s") (App (Var "n") (App (Var "z") (Var "s")))))))))
+-- >>>PP.pretty $ snd $ removeNames [] (Abs "m" (Abs "n" (Abs "s" (Abs "z" (App (Var "m") (App (Var "s") (App (Var "n") (App (Var "z") (Var "s")))))))))
 -- λ.λ.λ.λ.(3 (1 (2 (0 1))))
 --
--- >>>pretty $ snd $ removeNames [] (Abs "f" (App (Abs "x" (App (Var "f") (Abs "y" (App (App (Var "x") (Var "x")) (Var "y"))))) (Abs "x" (App (Var "f") (Abs "y" (App (App (Var "x") (Var "x")) (Var "y")))))))
+-- >>>PP.pretty $ snd $ removeNames [] (Abs "f" (App (Abs "x" (App (Var "f") (Abs "y" (App (App (Var "x") (Var "x")) (Var "y"))))) (Abs "x" (App (Var "f") (Abs "y" (App (App (Var "x") (Var "x")) (Var "y")))))))
 -- λ.(λ.(1 λ.((1 1) 0)) λ.(1 λ.((1 1) 0)))
 --
 removeNames' :: [Sym] -> Term1 -> (Γ,Term2)
@@ -180,19 +180,19 @@ removeNames fvars t1
     (bctx, t2) = removeNames' fvars t1
                                                     
 -- | Convert Term2 to Term1 for context
--- >>> (pretty . restoreNames []) $ removeNames [] (Abs "x" (Var "x"))
+-- >>> (PP.pretty . restoreNames []) $ removeNames [] (Abs "x" (Var "x"))
 -- λx.x
 --
--- >>> (pretty . restoreNames []) $ removeNames [] (Abs "s" (Abs "z" (Var "z")))
+-- >>> (PP.pretty . restoreNames []) $ removeNames [] (Abs "s" (Abs "z" (Var "z")))
 -- λs.λz.z
 --
--- >>> (pretty . restoreNames []) $ removeNames [] (Abs "s" (Abs "z" (App (Var "s") (App (Var "s") (Var "z")))))
+-- >>> (PP.pretty . restoreNames []) $ removeNames [] (Abs "s" (Abs "z" (App (Var "s") (App (Var "s") (Var "z")))))
 -- λs.λz.(s (s z))
 --
--- >>> (pretty . restoreNames []) $ removeNames [] (Abs "m" (Abs "n" (Abs "s" (Abs "z" (App (Var "m") (App (Var "s") (App (Var "n") (App (Var "z") (Var "s")))))))))
+-- >>> (PP.pretty . restoreNames []) $ removeNames [] (Abs "m" (Abs "n" (Abs "s" (Abs "z" (App (Var "m") (App (Var "s") (App (Var "n") (App (Var "z") (Var "s")))))))))
 -- λm.λn.λs.λz.(m (s (n (z s))))
 --
--- >>> (pretty . restoreNames []) $ removeNames [] (Abs "f" (App (Abs "x" (App (Var "f") (Abs "y" (App (App (Var "x") (Var "x")) (Var "y"))))) (Abs "g" (App (Var "f") (Abs "h" (App (App (Var "g") (Var "g")) (Var "h")))))))
+-- >>> (PP.pretty . restoreNames []) $ removeNames [] (Abs "f" (App (Abs "x" (App (Var "f") (Abs "y" (App (App (Var "x") (Var "x")) (Var "y"))))) (Abs "g" (App (Var "f") (Abs "h" (App (App (Var "g") (Var "g")) (Var "h")))))))
 -- λf.(λx.(f λy.((x x) y)) λg.(f λh.((g g) h)))
 --
 -- >>> (Abs "x" (Var "x")) == restoreNames [] (removeNames [] (Abs "x" (Var "x")))
@@ -210,16 +210,16 @@ removeNames fvars t1
 -- >>> (Abs "f" (App (Abs "x" (App (Var "f") (Abs "y" (App (App (Var "x") (Var "x")) (Var "y"))))) (Abs "g" (App (Var "f") (Abs "h" (App (App (Var "g") (Var "g")) (Var "h"))))))) == restoreNames [] (removeNames [] (Abs "f" (App (Abs "x" (App (Var "f") (Abs "y" (App (App (Var "x") (Var "x")) (Var "y"))))) (Abs "g" (App (Var "f") (Abs "h" (App (App (Var "g") (Var "g")) (Var "h"))))))))
 -- True
 --
--- >>> (pretty . (restoreNames ["z"])) $ removeNames ["z"] (Abs "x" (Var "z"))
+-- >>> (PP.pretty . (restoreNames ["z"])) $ removeNames ["z"] (Abs "x" (Var "z"))
 -- λx.z
 --
--- >>> (pretty . (restoreNames ["g"])) $ removeNames ["g"] (Abs "s" (Abs "z" (Var "g")))
+-- >>> (PP.pretty . (restoreNames ["g"])) $ removeNames ["g"] (Abs "s" (Abs "z" (Var "g")))
 -- λs.λz.g
 --
--- >>> (pretty . (restoreNames ["m", "n"])) $ removeNames ["m", "n"] (Abs "s" (Abs "z" (App (Var "s") (App (Var "m") (Var "n")))))
+-- >>> (PP.pretty . (restoreNames ["m", "n"])) $ removeNames ["m", "n"] (Abs "s" (Abs "z" (App (Var "s") (App (Var "m") (Var "n")))))
 -- λs.λz.(s (m n))
 --
--- >>> (pretty . restoreNames ["a","b","c"]) $ removeNames ["a","b","c"] (Abs "m" (Abs "n" (Abs "s" (Abs "z" (App (Var "a") (App (Var "b") (App (Var "n") (App (Var "z") (Var "c")))))))))
+-- >>> (PP.pretty . restoreNames ["a","b","c"]) $ removeNames ["a","b","c"] (Abs "m" (Abs "n" (Abs "s" (Abs "z" (App (Var "a") (App (Var "b") (App (Var "n") (App (Var "z") (Var "c")))))))))
 -- λm.λn.λs.λz.(a (b (n (z c))))
 --    
 restoreNames :: [Sym] -> (Γ,Term2) -> Term1
@@ -231,8 +231,10 @@ restoreNames = fun
     fun path (Node _ [ctx1, ctx2],App2 t1 t2) = App (fun path (ctx1, t1)) (fun path (ctx2, t2))
     fun path (ctx, t)                         = error $ "restoreNames unrecognized context " ++ show ctx ++ " for term " ++ show t
 
--- | Eval of nameless terms.
- 
+----------------------------
+-- Eval of nameless terms --
+----------------------------
+    
 termShift :: Int -> Term2 -> Term2
 termShift d t = walk 0 t
   where
@@ -257,3 +259,75 @@ eval2 (App2 t1@(Abs2 t12) v2@(Abs2 _)) = βRed2 v2 t12
 eval2 (App2 v1@(Abs2 _) t2)            = App2 v1  t2' where t2' = eval2 t2
 eval2 (App2 t1 t2)                     = App2 t1' t2  where t1' = eval2 t1
 eval2 t@_ = t
+
+-----------
+-- Parse --
+-----------
+
+--  Factoring out left recursion was tricky, and I wound up cribbing from this:
+--    http://stackoverflow.com/questions/18555390/lambda-calculus-grammar-llr
+
+-- | Id can't have λ, dot, paren, or space, lower seems to catch λ.
+--   Parse of id is distinct because Abs needs it plan as a Sym but
+--   Var wraps it.
+-- 
+-- >>> parse parseId "test" "x"
+-- Right "x"
+--
+-- >>> parse parseId "test" "id"
+-- Right "id"
+--
+parseId :: Parser Sym
+parseId = many1 (noneOf "λ.() ") >>= \i -> spaces >> return i
+
+-- | Var just wraps id.
+-- 
+-- >>> parse parseVar "test" "x"
+-- Right (Var "x")
+--
+-- >>> parse parseVar "test" "id"
+-- Right (Var "id")
+--
+parseVar :: Parser Term1
+parseVar = parseId >>= return . Var
+
+-- | Space(s) after var or id is optional
+-- 
+-- >>> parse parseAbs "test" "λx.x"
+-- Right (Abs "x" (Var "x"))
+--
+parseAbs :: Parser Term1
+parseAbs = char 'λ' >> parseId >>= \v -> char '.' >> spaces >> parseExpr >>= \e -> return $ Abs v e
+
+-- | One or more in a row, nested left.
+--
+-- >>> parse parseApp "test" "x y"
+-- Right (App (Var "x") (Var "y"))
+--
+parseApp :: Parser Term1
+parseApp = many1 parseTerm >>= return . (foldl1 App)
+
+-- | Parse according to parentheses.
+--
+-- >>> parse parseParenExpr "test" "(a(b(c d)))"
+-- Right (App (Var "a") (App (Var "b") (App (Var "c") (Var "d"))))
+--
+-- >>> parse parseParenExpr "test" "(((a b)c)d)"
+-- Right (App (App (App (Var "a") (Var "b")) (Var "c")) (Var "d"))
+-- 
+parseParenExpr :: Parser Term1
+parseParenExpr = char '(' >> parseExpr >>= \e -> char ')' >> return e
+
+-- | Allows expressions that aren't redexes.
+--
+-- >>> parse parseExpr "lambda" "λy.λz.z w x"
+-- Right (Abs "y" (Abs "z" (App (App (Var "z") (Var "w")) (Var "x"))))
+-- 
+-- >>> either (putStrLn . show) (putStrLn . show . PP.pretty) $ parse parseExpr "lambda" "λy.λz.z w x"
+-- λy.λz.((z w) x)
+-- 
+parseExpr :: Parser Term1
+parseExpr = parseAbs <|> parseApp <?> "expr"
+
+parseTerm :: Parser Term1
+parseTerm = parseVar <|> parseParenExpr <?> "term"
