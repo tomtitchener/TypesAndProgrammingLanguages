@@ -5,6 +5,8 @@ module Lambda where
  2) Untyped lambda calculus with de Bruijn presentation and full beta reduction
  --}
 
+import           Control.Monad                 (liftM)
+import           Data.Either                   (either)
 import           Data.List                     ((\\), elemIndices, intersect, sort, head, group)
 import           Data.Tree                     (Tree(..))
 import           Text.ParserCombinators.Parsec (Parser(..), (<|>), (<?>), many1, lower, char, parse, spaces, noneOf, letter, try)
@@ -234,31 +236,93 @@ restoreNames = fun
 ----------------------------
 -- Eval of nameless terms --
 ----------------------------
+
+-- [1 ⟼ s] (λ.2) maps to [x ⟼ s] (λy.x) assuming 1 is index of x in the outer context.
+-- Replace sym for 1 with s in term t.  Note match despite 1 vs. 2!
+-- "When a substitution goes under λ-abstraction, (as in above), the context in which the
+-- substitution is taking place becomes one variable longer than the original; we need to
+-- increment the indices of the free variables in s so that they keep referring to the same
+-- names in the new context as they did before.  But we have to do this carefully:  we can't
+-- just shift every variable index in s up by one, because this would also shift bound
+-- variables within s.  For example, if s = 2 (λ.0) (i.e., s = z (λw.w), assuming 2 is the
+-- index for z in the outer context), we need to shift the 2 but not the 0.  The shifting
+-- function below takes a "cutoff" parameter c that controls which variables should be shifted.
+-- It starts at 0 (meaning all variables should be shifted) and gets incremented by 1 every
+-- time the shifting function goes through a binder.  So, when calculating "shift from c to
+-- d for t", we know that the term t comes from inside c-many binders in the original argument
+-- to "shift from 0 to d".  Therefore, all identifiers k < c in t are bound in the original
+-- argument and should not be shifted, while identifiers k >= c are free and should be
+-- shifted." (Page 79).
     
+-- | Shift indexes for free Vars in Term t by offset d.  Counts binders in 
+--   subterms to identify free Vars that need to be shifted by binding
+--   depth d.  Answers same Term as input with indexes for all free Vars 
+--   shifted by offset d.  Relies on "removeNames" bumping indexes for free 
+--   vars successively with each additional binding, which happens automatically
+--   as path that starts from free vars becomes one longer with each binding.
+--   Avoids shifting of bound vars by counting binding depth in c, starting at 0.
+--   Note d may be negative, to shift back down a level, e.g. for outermost call.
+--   Shift of x only "carries" into Var in term when index for Var is greater 
+--   than the binding depth, counting from 0.
+--
+-- >>> termShift 1 (Abs2 (Var2 0))
+-- Abs2 (Var2 0)
+--
+-- >>> termShift 1 (Abs2 (Var2 1))
+-- Abs2 (Var2 2)
+--
+-- >>> termShift 1 (Abs2 (Abs2 (Abs2 (Var2 2))))
+-- Abs2 (Abs2 (Abs2 (Var2 2)))
+--    
+-- >>> termShift 1 (Abs2 (Abs2 (Abs2 (Var2 3))))
+-- Abs2 (Abs2 (Abs2 (Var2 4)))
+--    
 termShift :: Int -> Term2 -> Term2
-termShift d t = walk 0 t
+termShift d = walk 0 
   where
     walk :: Int -> Term2 -> Term2
-    walk c t'@(Var2 i) = if i >= c then (Var2 (i+d)) else t'
+    walk c t'@(Var2 i) = if i >= c then Var2 (i+d) else t'
     walk c (Abs2 t1) = Abs2 $ walk (c+1) t1
     walk c (App2 t1 t2) = App2 (walk c t1) (walk c t2)
 
+-- | Substitute s for index j in term t where j is always 0, 
+--   effectively, substitute s for top level binding in t.
+--   Descend subterms in t counting up a binding level for
+--   each abstraction.  At terminal Var(s) in t, if Var index
+--   i equals binding depth, substitute with s, being careful
+--   to shift s by binding depth.
+--
+--  termSubst 0 (Abs2 (Var2 0)) (Abs2 (Var2 0))
+-- 
 termSubst :: Int -> Term2 -> Term2 -> Term2
-termSubst j s t = walk 0 t
+termSubst 0 s@(Abs2 _) t@(Abs2 _) = walk 0 t
   where
     walk :: Int -> Term2 -> Term2
-    walk c t'@(Var2 i)  = if i == j + c then termShift c s else t'
+    walk c t'@(Var2 i)  = if i == 0 + c then termShift c s else t'
     walk c (Abs2 t1)    = Abs2 $ walk (c+1) t1
     walk c (App2 t1 t2) = App2 (walk c t1) (walk c t2)
-
+termSubst 0 s t = error $ "termSubst called with top level terms other than Abs2, s " ++ show s ++ " or t " ++ show t
+termSubst n s t = error $ "termSubst called with non-zero index " ++ show n ++ " for terms s " ++ show s ++ " and t " ++ show t
+    
+-- | Substitute s in t.  Called for application of t1
+--   and s--(t1 s)--where both t1 and s are abstractions
+--   and t is the term within abstraction t1.  s is value
+--   to substitute for top-level index 0 in t1.  Shift s
+--   up by one to account for expansion by 1 of binding
+--   in top-level term t1, then shift result back down
+--   by 1 to compensate.
 βRed2 :: Term2 -> Term2 -> Term2
-βRed2 s t = termShift (-1) (termSubst 0 (termShift 1 s) t)
+βRed2 s@(Abs2 _) t@(Abs2 _) = termShift (-1) $ termSubst 0 (termShift 1 s) t
+βRed2 s t = error $ "βRed2 unexpected types for term s " ++ show  s ++ " or t " ++ show t
+
+eval2' :: Term2 -> Term2
+eval2' (App2 t1@(Abs2 t12) v2@(Abs2 _)) = βRed2 v2 t12
+eval2' (App2 v1@(Abs2 _) t2)            = App2 v1  t2' where t2' = eval2' t2
+eval2' (App2 t1 t2)                     = App2 t1' t2  where t1' = eval2' t1
+eval2' t@_ = t
 
 eval2 :: Term2 -> Term2
-eval2 (App2 t1@(Abs2 t12) v2@(Abs2 _)) = βRed2 v2 t12
-eval2 (App2 v1@(Abs2 _) t2)            = App2 v1  t2' where t2' = eval2 t2
-eval2 (App2 t1 t2)                     = App2 t1' t2  where t1' = eval2 t1
-eval2 t@_ = t
+eval2 t1 = if t1 == t2 then t2 else eval2 t2 where t2 = eval2 t1
 
 -----------
 -- Parse --
@@ -289,7 +353,7 @@ parseId = many1 (noneOf "λ.() ") >>= \i -> spaces >> return i
 -- Right (Var "id")
 --
 parseVar :: Parser Term1
-parseVar = parseId >>= return . Var
+parseVar = liftM Var parseId
 
 -- | Space(s) after var or id is optional
 -- 
@@ -305,7 +369,7 @@ parseAbs = char 'λ' >> parseId >>= \v -> char '.' >> spaces >> parseExpr >>= \e
 -- Right (App (Var "x") (Var "y"))
 --
 parseApp :: Parser Term1
-parseApp = many1 parseTerm >>= return . (foldl1 App)
+parseApp = liftM (foldl1 App) (many1 parseTerm)
 
 -- | Parse according to parentheses.
 --
@@ -331,3 +395,12 @@ parseExpr = parseAbs <|> parseApp <?> "expr"
 
 parseTerm :: Parser Term1
 parseTerm = parseVar <|> parseParenExpr <?> "term"
+
+evalStr :: String -> String
+evalStr s = either show right (parse parseTerm "lambda" s)
+  where
+    right t1 = show . PP.pretty $ restoreNames fctx (bctx, eval2 t2)
+      where
+        fctx       = freeVars t1
+        (bctx, t2) = removeNames fctx t1
+    
