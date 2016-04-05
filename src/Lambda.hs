@@ -295,13 +295,13 @@ termShift d = walk 0
 --  termSubst 0 (Abs2 (Var2 0)) (Abs2 (Var2 0))
 -- 
 termSubst :: Int -> Term2 -> Term2 -> Term2
-termSubst 0 s@(Abs2 _) t@(Abs2 _) = walk 0 t
+termSubst 0 s@(Abs2 _) t = walk 0 t
   where
     walk :: Int -> Term2 -> Term2
     walk c t'@(Var2 i)  = if i == 0 + c then termShift c s else t'
     walk c (Abs2 t1)    = Abs2 $ walk (c+1) t1
     walk c (App2 t1 t2) = App2 (walk c t1) (walk c t2)
-termSubst 0 s t = error $ "termSubst called with top level terms other than Abs2, s " ++ show s ++ " or t " ++ show t
+termSubst 0 s t = error $ "termSubst called with top level terms other than Abs2, s " ++ show s 
 termSubst n s t = error $ "termSubst called with non-zero index " ++ show n ++ " for terms s " ++ show s ++ " and t " ++ show t
     
 -- | Substitute s in t.  Called for application of t1
@@ -312,7 +312,7 @@ termSubst n s t = error $ "termSubst called with non-zero index " ++ show n ++ "
 --   in top-level term t1, then shift result back down
 --   by 1 to compensate.
 βRed2 :: Term2 -> Term2 -> Term2
-βRed2 s@(Abs2 _) t@(Abs2 _) = termShift (-1) $ termSubst 0 (termShift 1 s) t
+βRed2 s@(Abs2 _) t = termShift (-1) $ termSubst 0 (termShift 1 s) t
 βRed2 s t = error $ "βRed2 unexpected types for term s " ++ show  s ++ " or t " ++ show t
 
 eval2' :: Term2 -> Term2
@@ -322,14 +322,13 @@ eval2' (App2 t1 t2)                     = App2 t1' t2  where t1' = eval2' t1
 eval2' t@_ = t
 
 eval2 :: Term2 -> Term2
-eval2 t1 = if t1 == t2 then t2 else eval2 t2 where t2 = eval2 t1
+eval2 t1 = if t1 == t2 then t2 else eval2 t2 where t2 = eval2' t1
 
 -----------
 -- Parse --
 -----------
 
---  Factoring out left recursion was tricky, and I wound up cribbing from this:
---    http://stackoverflow.com/questions/18555390/lambda-calculus-grammar-llr
+--  Factoring out left recursion was tricky, and I wound up cribbing from parser.mly --
 
 -- | Id can't have λ, dot, paren, or space, lower seems to catch λ.
 --   Parse of id is distinct because Abs needs it plan as a Sym but
@@ -360,42 +359,47 @@ parseVar = liftM Var parseId
 -- >>> parse parseAbs "test" "λx.x"
 -- Right (Abs "x" (Var "x"))
 --
+-- >>> parse parseAbs "test" "λx. x"
+-- Right (Abs "x" (Var "x"))
+--
 parseAbs :: Parser Term1
-parseAbs = char 'λ' >> parseId >>= \v -> char '.' >> spaces >> parseExpr >>= \e -> return $ Abs v e
+parseAbs = char 'λ' >> parseId >>= \v -> char '.' >> spaces >> parseTerm >>= \e -> return $ Abs v e
+
+-- | 
+-- >>> parse parseTerm "lambda" "(λx.x)y"
+-- Right (App (Abs "x" (Var "x")) (Var "y"))
+--
+-- >>> parse parseTerm "lambda" "λx.x y"
+-- Right (Abs "x" (App (Var "x") (Var "y")))
+--
+parseTerm :: Parser Term1
+parseTerm = parseAppTerm <|> parseAbs
 
 -- | One or more in a row, nested left.
 --
--- >>> parse parseApp "test" "x y"
+-- >>> parse parseAppTerm "test" "x y"
 -- Right (App (Var "x") (Var "y"))
 --
-parseApp :: Parser Term1
-parseApp = liftM (foldl1 App) (many1 parseTerm)
+-- >>> parse parseAppTerm "test" "x y z"
+-- Right (App (App (Var "x") (Var "y")) (Var "z"))
+--
+parseAppTerm :: Parser Term1
+parseAppTerm = liftM (foldl1 App) (many1 parseATerm)
 
 -- | Parse according to parentheses.
 --
--- >>> parse parseParenExpr "test" "(a(b(c d)))"
+-- >>> parse parseATerm "test" "(a(b(c d)))"
 -- Right (App (Var "a") (App (Var "b") (App (Var "c") (Var "d"))))
 --
--- >>> parse parseParenExpr "test" "(((a b)c)d)"
+-- >>> parse parseATerm "test" "(((a b)c)d)"
 -- Right (App (App (App (Var "a") (Var "b")) (Var "c")) (Var "d"))
 -- 
-parseParenExpr :: Parser Term1
-parseParenExpr = char '(' >> parseExpr >>= \e -> char ')' >> return e
+parseATerm :: Parser Term1
+parseATerm = (char '(' >> parseTerm >>= \e -> char ')' >> return e) <|> parseVar
 
--- | Allows expressions that aren't redexes.
+-- | Doesn't work!  Have to reduce name contexts along with expressions.
+--   TBD
 --
--- >>> parse parseExpr "lambda" "λy.λz.z w x"
--- Right (Abs "y" (Abs "z" (App (App (Var "z") (Var "w")) (Var "x"))))
--- 
--- >>> either (putStrLn . show) (putStrLn . show . PP.pretty) $ parse parseExpr "lambda" "λy.λz.z w x"
--- λy.λz.((z w) x)
--- 
-parseExpr :: Parser Term1
-parseExpr = parseAbs <|> parseApp <?> "expr"
-
-parseTerm :: Parser Term1
-parseTerm = parseVar <|> parseParenExpr <?> "term"
-
 evalStr :: String -> String
 evalStr s = either show right (parse parseTerm "lambda" s)
   where
@@ -403,4 +407,3 @@ evalStr s = either show right (parse parseTerm "lambda" s)
       where
         fctx       = freeVars t1
         (bctx, t2) = removeNames fctx t1
-    
