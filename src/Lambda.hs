@@ -341,7 +341,7 @@ eval2 t1 = if t1 == t2 then t2 else eval2 t2 where t2 = eval2' t1
 -- Right "id"
 --
 parseId :: Parser Sym
-parseId = many1 (noneOf "λ.() ") >>= \i -> spaces >> return i
+parseId = many1 (noneOf "λ.() ")
 
 -- | Var just wraps id.
 -- 
@@ -363,9 +363,10 @@ parseVar = liftM Var parseId
 -- Right (Abs "x" (Var "x"))
 --
 parseAbs :: Parser Term1
-parseAbs = char 'λ' >> parseId >>= \v -> char '.' >> spaces >> parseTerm >>= \e -> return $ Abs v e
+parseAbs = char 'λ' >> parseId >>= \v -> spaces >> char '.' >> spaces >> parseTerm >>= \e -> return $ Abs v e
 
--- | 
+-- | Parse a Term 
+-- 
 -- >>> parse parseTerm "lambda" "(λx.x)y"
 -- Right (App (Abs "x" (Var "x")) (Var "y"))
 --
@@ -395,7 +396,7 @@ parseAppTerm = liftM (foldl1 App) (many1 parseATerm)
 -- Right (App (App (App (Var "a") (Var "b")) (Var "c")) (Var "d"))
 -- 
 parseATerm :: Parser Term1
-parseATerm = (char '(' >> parseTerm >>= \e -> char ')' >> return e) <|> parseVar
+parseATerm = (char '(' >> parseTerm >>= \e -> char ')' >> spaces >> return e) <|> (parseVar >>= \v -> spaces >> return v)
 
 -- | Doesn't work!  Have to reduce name contexts along with expressions.
 --   TBD
