@@ -16,6 +16,10 @@ import qualified Text.PrettyPrint.Leijen as PP ((<>), char, int, string, pretty,
 -- 1 --
 -------
 
+-- | Use a 'String' instead of 'Char' so 'Sym' can be name, e.g. for
+--
+--   @id = (λx.x);@
+--
 type Sym = String
 
 -- | Named terms.
@@ -25,7 +29,8 @@ data Term1 =
   | App Term1 Term1
   deriving (Show, Eq)
 
--- | Pretty print Term1
+-- | Pretty print 'Term1'
+--
 --  >>> PP.pretty $ (App (Abs "x"(Var "x")) (Var "x"))
 --  (λx.x x)
 --
@@ -34,25 +39,49 @@ instance PP.Pretty Term1 where
   pretty (Abs s t)   = PP.string "λ" PP.<> PP.string s PP.<> PP.string "." PP.<> PP.pretty t
   pretty (App t1 t2) = PP.char '(' PP.<> PP.pretty t1 PP.<> PP.string " " PP.<> PP.pretty t2 PP.<> PP.char ')'
 
+-- | Sort input list and answer sorted order less duplicates.
+--
+-- >>> unique [1,1,5,5,3,2,10,10,22,22]
+-- [1,2,3,5,10,22]
+--
 unique :: (Eq a, Ord a) => [a] -> [a]
 unique = map head . group . sort
 
-freeVars :: Term1 -> [String]
+-- | Answer list of of free variables in 'Term1'
+--
+-- >>> freeVars (App (Var "a") (Var "b"))
+-- ["a","b"]
+--
+freeVars :: Term1 -> [Sym]
 freeVars (Var s)     = [s]
 freeVars (Abs s t)   = freeVars t \\ [s]
 freeVars (App t1 t2) = unique $ freeVars t1 ++ freeVars t2
 
--- Beta reduce, "up to renaming of bound variables", pages 69-71.
--- Page 55, "Operational Semantics"
--- "Each step in the computation consists of rewriting an application 
--- whose left-hand component is an abstraction, by substituting the
--- right-hand component for the bound variable in the abstractions'
--- body.  Graphically, we write
---   (λx.t12) t2 → [x ⟼ t2]t12 where [x ⟼ t2]t12 means "the term
--- obtained by replacing all free occurances of x in t12 by t2".
--- beta reduce Term1 t12 for Sym 'x' in Term1 t1
--- Naive: subst x in s with y
--- [x ⟼ s]y => subst x with s in y
+-- | Beta reduce, "up to renaming of bound variables", pages 69-71.
+--
+--   @
+--   "Each step in the computation consists of rewriting an application 
+--   whose left-hand component is an abstraction, by substituting the
+--   right-hand component for the bound variable in the abstractions'
+--   body.
+-- 
+--   Graphically, we write
+--
+--     (λx.t12) t2 → [x ⟼ t2]t12 where [x ⟼ t2]t12
+--
+--   means "the term obtained by replacing all free occurances of x in t12 by t2".
+--   @
+--
+--   Page 55, "Operational Semantics"
+--
+--   beta reduce 'Term1' t12 for 'Sym' 'x' in 'Term1' t1
+--
+--   Naive: subst x in s with y
+--
+--   @
+--   [x⟼s]y => subst x with s in y
+--   @
+--
 βRed1 :: String -> Term1 -> Term1 -> Term1
 βRed1 x s (Var y)
   | y == x    = s
@@ -62,44 +91,52 @@ freeVars (App t1 t2) = unique $ freeVars t1 ++ freeVars t2
   | otherwise                             = Abs y t
 βRed1 x s (App t1 t2) = App (βRed1 x s t1) (βRed1 x s t2)
 
--- | Eval a Term1
+-- | Eval a 'Term1' "up to renaming of bound variables"
+--
 -- >>>PP.pretty (App (Abs "x" (Abs "y" (Var "x"))) (Abs "z" (App (Var "z") (Var "w"))))
 -- (λx.λy.x λz.(z w))
 --
 -- >>>PP.pretty . eval1 $ (App (Abs "x" (Abs "y" (Var "x"))) (Abs "z" (App (Var "z") (Var "w"))))
 -- λy.λz.(z w)
 --
--- same as [x ⟼ λz.z w] λy.x
+-- Same as [x ⟼ λz.z w] λy.x
+--
 -- >>>PP.pretty $ βRed1 "x" (Abs "z" (App (Var "z") (Var "w"))) (Abs "y" (Var "x")) 
 -- λy.λz.(z w)
 --
 -- Avoiding bound variables
+--
 -- >>>PP.pretty (App (Abs "x" (Abs "x" (Var "x"))) (Var "y"))
 -- (λx.λx.x y)
 --
 -- >>>PP.pretty . eval1 $ (App (Abs "x" (Abs "x" (Var "x"))) (Var "y"))
 -- λx.x
 --
--- same as [x ⟼ y] λx.x
+-- Same as [x ⟼ y] λx.x
+--
 -- >>>PP.pretty $ βRed1 "x" (Var "y") (Abs "x" (Var "x"))
 -- λx.x
 --
 -- Avoiding variable capture
+--
 -- >>>PP.pretty $ (App (Abs "x" (Abs "z" (Var "x"))) (Var "z"))
 -- (λx.λz.x z)
 --
 -- >>>PP.pretty . eval1 $ (App (Abs "x" (Abs "z" (Var "x"))) (Var "z"))
 -- λz.x
 --
--- same as [x⟼z] λz.x
+-- Same as [x⟼z] λz.x
+--
 -- >>>PP.pretty $ βRed1 "x" (Var "z") (Abs "z" (Var "x"))
 -- λz.x
 --
 -- but [x ⟼y z] λy.x y (page 71)
+--
 -- >>>PP.pretty . eval1 $ (App (Abs "x" (Abs "y" (App (Var "x") (Var "y")))) (App (Var "y") (Var "z")))
 -- λy.(x y)
 --
--- same as
+-- Same as
+--
 -- >>>PP.pretty $ βRed1 "x" (App (Var "y") (Var "z")) (Abs "y" (App (Var "x") (Var "y")))
 -- λy.(x y)
 --
@@ -120,7 +157,8 @@ data Term2 =
   | App2 Term2 Term2
   deriving (Show, Eq)
 
--- | Pretty print Term2
+-- | Pretty print 'Term2'
+--
 --   >>> PP.pretty $ (App2 (Abs2 (Var2 0)) (Var2 0))
 --   (λ.0 0)
 --
@@ -129,29 +167,43 @@ instance PP.Pretty Term2 where
  pretty (Abs2 t)     = PP.string "λ." PP.<> PP.pretty t
  pretty (App2 t1 t2) = PP.char '(' PP.<> PP.pretty t1 PP.<> PP.string " " PP.<>  PP.pretty t2 PP.<> PP.char ')'
 
--- | Name context in text is Gamma, but as just an ordered list where indexes match order.
---   Consequence is need to "... make up names for for the variables bound by abstractions
---   in t" (6.1.5).  That's because naming contexts diverge with App, where left and right
+-- | Name context in text is 'Γ', but as just an ordered list where indexes match order.  Consequence is need to
+--
+--   @
+--   "... make up names for for the variables bound by abstractions in t."
+--   @
+--
+--   (6.1.5).
+-- 
+--   That's because naming contexts diverge with 'App', where left and right
 --   terms might have bindings with same names.  Instead of list, use a tree with max of
---   two-way split to parallel App.  Traverse different paths under restore to regain
+--   two-way split to parallel 'App's.  Traverse different paths under restore to regain
 --   unique naming context.
+--
 type Γ  = Tree Sym
 
--- | Appends tree in second arg to end of straight line tree in first arg.
---   Used a) to append bound context to end of free context, b) to build
---   up new context for an outer Abs over an inner context.
+-- | Appends tree in second arg to end of straight line tree in first arg.  Used
+--
+--     * to append bound context to end of free context,
+--     * to build up new context for an outer Abs over an inner context.
+--
 --   Fails if tree in first arg has more than one branch.
 --
 --   >>> appendCtxts (Node {rootLabel = "l", subForest = [Node {rootLabel = "m", subForest = [Node {rootLabel = "n", subForest = [Node {rootLabel = "", subForest = []}]}]}]}) (Node {rootLabel = "a", subForest = [Node {rootLabel = "b", subForest = [Node {rootLabel = "c", subForest = [Node {rootLabel = "", subForest = []}]}]}]})
 --   Node {rootLabel = "l", subForest = [Node {rootLabel = "m", subForest = [Node {rootLabel = "n", subForest = [Node {rootLabel = "a", subForest = [Node {rootLabel = "b", subForest = [Node {rootLabel = "c", subForest = [Node {rootLabel = "", subForest = []}]}]}]}]}]}]}
 --
 appendCtxts :: Γ -> Γ -> Γ
-appendCtxts (Node "" [])    bctx               = bctx
+appendCtxts (Node "" [])    bctx            = bctx
 appendCtxts (Node s [])     (Node s' ctxs)  = Node s [Node s' ctxs]
-appendCtxts (Node s [ctx])  bctx               = Node s [appendCtxts ctx bctx]
-appendCtxts n@_ dst                               = error $ "appendCtxts unrecognized source " ++ show n ++ " for dst " ++ show dst
+appendCtxts (Node s [ctx])  bctx            = Node s [appendCtxts ctx bctx]
+appendCtxts n@_ dst                         = error $ "appendCtxts unrecognized source " ++ show n ++ " for dst " ++ show dst
 
--- | Convert Term1 to Term2 for context
+removeNames' :: [Sym] -> Term1 -> (Γ,Term2)
+removeNames' path (Var s)     = (ctx,  Var2 i)       where i = last $ elemIndices s path; ctx = Node "" [] -- need to safeguard elemIndices returns [] e.g. free var not in list.
+removeNames' path (Abs s t)   = (ctx', Abs2 t')      where (ctx,t') = removeNames' (s:path) t; ctx' = appendCtxts (Node s []) ctx
+removeNames' path (App t1 t2) = (ctx', App2 t1' t2') where (ctx1, t1') = removeNames' path t1; (ctx2, t2') = removeNames' path t2; ctx' = Node "" [ctx1, ctx2]
+                                                    
+-- | Convert 'Term1' to pair of context 'Γ' and (unnamed) 'Term2' for free vars ['Sym'].
 --
 -- >>>PP.pretty $ snd $ removeNames [] (Abs "x" (Var "x"))
 -- λ.0
@@ -168,11 +220,6 @@ appendCtxts n@_ dst                               = error $ "appendCtxts unrecog
 -- >>>PP.pretty $ snd $ removeNames [] (Abs "f" (App (Abs "x" (App (Var "f") (Abs "y" (App (App (Var "x") (Var "x")) (Var "y"))))) (Abs "x" (App (Var "f") (Abs "y" (App (App (Var "x") (Var "x")) (Var "y")))))))
 -- λ.(λ.(1 λ.((1 1) 0)) λ.(1 λ.((1 1) 0)))
 --
-removeNames' :: [Sym] -> Term1 -> (Γ,Term2)
-removeNames' path (Var s)     = (ctx,  Var2 i)       where i = last $ elemIndices s path; ctx = Node "" [] -- need to safeguard elemIndices returns [] e.g. free var not in list.
-removeNames' path (Abs s t)   = (ctx', Abs2 t')      where (ctx,t') = removeNames' (s:path) t; ctx' = appendCtxts (Node s []) ctx
-removeNames' path (App t1 t2) = (ctx', App2 t1' t2') where (ctx1, t1') = removeNames' path t1; (ctx2, t2') = removeNames' path t2; ctx' = Node "" [ctx1, ctx2]
-                                                    
 removeNames :: [Sym] -> Term1 -> (Γ,Term2)
 removeNames fvars t1
   | fvars `intersect` fvars' /= fvars' = error $ "removeNames not all vars free in " ++ show t1 ++ "" ++ show fvars' ++ " are included in " ++ show fvars
@@ -181,7 +228,8 @@ removeNames fvars t1
     fvars'     = freeVars t1
     (bctx, t2) = removeNames' fvars t1
                                                     
--- | Convert Term2 to Term1 for context
+-- | Convert (unnamed) 'Term2' to 'Term1' for free vars ['Sym'] and context 'Γ'.
+--
 -- >>> (PP.pretty . restoreNames []) $ removeNames [] (Abs "x" (Var "x"))
 -- λx.x
 --
@@ -206,7 +254,7 @@ removeNames fvars t1
 -- >>> (Abs "s" (Abs "z" (App (Var "s") (App (Var "s") (Var "z"))))) == restoreNames [] (removeNames [] (Abs "s" (Abs "z" (App (Var "s") (App (Var "s") (Var "z"))))))
 -- True
 --
--- >> (Abs "m" (Abs "n" (Abs "s" (Abs "z" (App (Var "m") (App (Var "s") (App (Var "n") (App (Var "z") (Var "s"))))))))) == restoreNames [] (removeNames [] (Abs "m" (Abs "n" (Abs "s" (Abs "z" (App (Var "m") (App (Var "s") (App (Var "n") (App (Var "z") (Var "s"))))))))))
+-- >>> (Abs "m" (Abs "n" (Abs "s" (Abs "z" (App (Var "m") (App (Var "s") (App (Var "n") (App (Var "z") (Var "s"))))))))) == restoreNames [] (removeNames [] (Abs "m" (Abs "n" (Abs "s" (Abs "z" (App (Var "m") (App (Var "s") (App (Var "n") (App (Var "z") (Var "s"))))))))))
 -- True
 --    
 -- >>> (Abs "f" (App (Abs "x" (App (Var "f") (Abs "y" (App (App (Var "x") (Var "x")) (Var "y"))))) (Abs "g" (App (Var "f") (Abs "h" (App (App (Var "g") (Var "g")) (Var "h"))))))) == restoreNames [] (removeNames [] (Abs "f" (App (Abs "x" (App (Var "f") (Abs "y" (App (App (Var "x") (Var "x")) (Var "y"))))) (Abs "g" (App (Var "f") (Abs "h" (App (App (Var "g") (Var "g")) (Var "h"))))))))
@@ -237,33 +285,16 @@ restoreNames = fun
 -- Eval of nameless terms --
 ----------------------------
 
--- [1 ⟼ s] (λ.2) maps to [x ⟼ s] (λy.x) assuming 1 is index of x in the outer context.
--- Replace sym for 1 with s in term t.  Note match despite 1 vs. 2!
--- "When a substitution goes under λ-abstraction, (as in above), the context in which the
--- substitution is taking place becomes one variable longer than the original; we need to
--- increment the indices of the free variables in s so that they keep referring to the same
--- names in the new context as they did before.  But we have to do this carefully:  we can't
--- just shift every variable index in s up by one, because this would also shift bound
--- variables within s.  For example, if s = 2 (λ.0) (i.e., s = z (λw.w), assuming 2 is the
--- index for z in the outer context), we need to shift the 2 but not the 0.  The shifting
--- function below takes a "cutoff" parameter c that controls which variables should be shifted.
--- It starts at 0 (meaning all variables should be shifted) and gets incremented by 1 every
--- time the shifting function goes through a binder.  So, when calculating "shift from c to
--- d for t", we know that the term t comes from inside c-many binders in the original argument
--- to "shift from 0 to d".  Therefore, all identifiers k < c in t are bound in the original
--- argument and should not be shifted, while identifiers k >= c are free and should be
--- shifted." (Page 79).
-    
--- | Shift indexes for free Vars in Term t by offset d.  Counts binders in 
---   subterms to identify free Vars that need to be shifted by binding
---   depth d.  Answers same Term as input with indexes for all free Vars 
---   shifted by offset d.  Relies on "removeNames" bumping indexes for free 
+-- | Shift indexes for free 'Var's in 'Term' t by offset d.  Counts binders in 
+--   subterms to identify free 'Var's that need to be shifted by binding
+--   depth d.  Answers same 'Term' as input with indexes for all free 'Var's 
+--   shifted by offset d.  Relies on 'removeNames' bumping indexes for free 
 --   vars successively with each additional binding, which happens automatically
 --   as path that starts from free vars becomes one longer with each binding.
 --   Avoids shifting of bound vars by counting binding depth in c, starting at 0.
---   Note d may be negative, to shift back down a level, e.g. for outermost call.
---   Shift of x only "carries" into Var in term when index for Var is greater 
---   than the binding depth, counting from 0.
+--   Note index in first argument may be negative, to shift back down a level, e.g. 
+--   for outermost call.  Shift of x only "carries" into 'Var' in term when index 
+--   for 'Var' is greater than the binding depth, counting from 0.
 --
 -- >>> termShift 1 (Abs2 (Var2 0))
 -- Abs2 (Var2 0)
@@ -288,11 +319,12 @@ termShift d = walk 0
 -- | Substitute s for index j in term t where j is always 0, 
 --   effectively, substitute s for top level binding in t.
 --   Descend subterms in t counting up a binding level for
---   each abstraction.  At terminal Var(s) in t, if Var index
+--   each abstraction.  At terminal 'Var'(s) in t, if 'Var' index
 --   i equals binding depth, substitute with s, being careful
 --   to shift s by binding depth.
 --
---  termSubst 0 (Abs2 (Var2 0)) (Abs2 (Var2 0))
+--  >>> termSubst 0 (Abs2 (Var2 0)) (Abs2 (Var2 0))
+--  Abs2 (Var2 0)
 -- 
 termSubst :: Int -> Term2 -> Term2 -> Term2
 termSubst 0 s@(Abs2 _) t = walk 0 t
@@ -311,6 +343,7 @@ termSubst n s t = error $ "termSubst called with non-zero index " ++ show n ++ "
 --   up by one to account for expansion by 1 of binding
 --   in top-level term t1, then shift result back down
 --   by 1 to compensate.
+--
 βRed2 :: Term2 -> Term2 -> Term2
 βRed2 s@(Abs2 _) t = termShift (-1) $ termSubst 0 (termShift 1 s) t
 βRed2 s t = error $ "βRed2 unexpected types for term s " ++ show  s ++ " or t " ++ show t
@@ -321,6 +354,30 @@ eval2' (App2 v1@(Abs2 _) t2)            = App2 v1  t2' where t2' = eval2' t2
 eval2' (App2 t1 t2)                     = App2 t1' t2  where t1' = eval2' t1
 eval2' t@_ = t
 
+-- | Eval of nameless terms.
+--
+--   [1 ⟼ s] (λ.2) maps to [x ⟼ s] (λy.x) assuming 1 is index of x in the outer context.
+--   Replace sym for 1 with s in term t.  Note match despite 1 vs. 2!
+--
+--   @
+--   "When a substitution goes under λ-abstraction, (as in above), the context in which the
+--   substitution is taking place becomes one variable longer than the original; we need to
+--   increment the indices of the free variables in s so that they keep referring to the same
+--   names in the new context as they did before.  But we have to do this carefully:  we can't
+--   just shift every variable index in s up by one, because this would also shift bound
+--   variables within s.  For example, if s = 2 (λ.0) (i.e., s = z (λw.w), assuming 2 is the
+--   index for z in the outer context), we need to shift the 2 but not the 0.  The shifting
+--   function below takes a "cutoff" parameter c that controls which variables should be shifted.
+--   It starts at 0 (meaning all variables should be shifted) and gets incremented by 1 every
+--   time the shifting function goes through a binder.  So, when calculating "shift from c to
+--   d for t", we know that the term t comes from inside c-many binders in the original argument
+--   to "shift from 0 to d".  Therefore, all identifiers k < c in t are bound in the original
+--   argument and should not be shifted, while identifiers k >= c are free and should be
+--   shifted." 
+--   @
+--
+--  (Page 79).
+--
 eval2 :: Term2 -> Term2
 eval2 t1 = if t1 == t2 then t2 else eval2 t2 where t2 = eval2' t1
 
@@ -331,8 +388,8 @@ eval2 t1 = if t1 == t2 then t2 else eval2 t2 where t2 = eval2' t1
 --  Factoring out left recursion was tricky, and I wound up cribbing from parser.mly --
 
 -- | Id can't have λ, dot, paren, or space, lower seems to catch λ.
---   Parse of id is distinct because Abs needs it plan as a Sym but
---   Var wraps it.
+--   Parse of id is distinct because 'Abs' needs it plan as a 'Sym' but
+--   'Var' wraps it.
 -- 
 -- >>> parse parseId "test" "x"
 -- Right "x"
@@ -343,7 +400,7 @@ eval2 t1 = if t1 == t2 then t2 else eval2 t2 where t2 = eval2' t1
 parseId :: Parser Sym
 parseId = many1 (noneOf "λ.() ")
 
--- | Var just wraps id.
+-- | 'Var' just wraps id.
 -- 
 -- >>> parse parseVar "test" "x"
 -- Right (Var "x")
