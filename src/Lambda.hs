@@ -348,10 +348,21 @@ termSubst n s t = error $ "termSubst called with non-zero index " ++ show n ++ "
 βRed2 s@(Abs2 _) t = termShift (-1) $ termSubst 0 (termShift 1 s) t
 βRed2 s t = error $ "βRed2 unexpected types for term s " ++ show  s ++ " or t " ++ show t
 
-eval2' :: Term2 -> Term2
-eval2' (App2 t1@(Abs2 t12) v2@(Abs2 _)) = βRed2 v2 t12
-eval2' (App2 v1@(Abs2 _) t2)            = App2 v1  t2' where t2' = eval2' t2
-eval2' (App2 t1 t2)                     = App2 t1' t2  where t1' = eval2' t1
+nullCtx :: Γ -> Bool
+nullCtx (Node "" []) = True
+nullCtx _            = False
+
+termCtx :: Γ -> Bool
+termCtx (Node _ [c]) = nullCtx c
+
+ctxRed :: Γ -> Γ
+ctxRed (Node "" [c1@(Node _ c2), c3])   = if termCtx c1 then c3 else (Node "" (c2 ++ [c3]))
+ctxRed c = error $ "ctxRed unexpected context " ++ show c
+
+eval2' :: (Γ,Term2) -> (Γ,Term2)
+eval2' (c, App2 t1@(Abs2 t12) v2@(Abs2 _)) = (c', βRed2 v2 t12) where c' = ctxRed c
+eval2' (c, App2 v1@(Abs2 _) t2)            = (c', App2 v1  t2') where (c',t2') = eval2' (c,t2)
+eval2' (c, App2 t1 t2)                     = (c', App2 t1' t2)  where (c',t1') = eval2' (c,t1)
 eval2' t@_ = t
 
 -- | Eval of nameless terms.
@@ -378,8 +389,11 @@ eval2' t@_ = t
 --
 --  (Page 79).
 --
-eval2 :: Term2 -> Term2
-eval2 t1 = if t1 == t2 then t2 else eval2 t2 where t2 = eval2' t1
+-- >>> PP.pretty $ restoreNames [] (eval2 (removeNames [] (App (Abs "x" (Var "x")) (Abs "x" (Var "x")))))
+-- λx.x
+--
+eval2 :: (Γ,Term2) -> (Γ,Term2)
+eval2 p@(_, t1) = if t1 == t2 then p' else eval2 p' where p'@(_, t2) = eval2' p
 
 -----------
 -- Parse --
@@ -455,13 +469,14 @@ parseAppTerm = liftM (foldl1 App) (many1 parseATerm)
 parseATerm :: Parser Term1
 parseATerm = (char '(' >> parseTerm >>= \e -> char ')' >> spaces >> return e) <|> (parseVar >>= \v -> spaces >> return v)
 
--- | Doesn't work!  Have to reduce name contexts along with expressions.
---   TBD
+-- | Evaluator for named lambda expression.  Convert to unnamed.  Evaluate.  Restore names.  Pretty print.
+--  
+-- >>> either (PP.string. show) (\t -> PP.pretty (restoreNames [] (eval2 (removeNames [] t)))) (parse parseTerm "lambda" "((λx.x) (λx.x))")
+-- λx.x
 --
 evalStr :: String -> String
-evalStr s = either show right (parse parseTerm "lambda" s)
+evalStr s = either show right $ parse parseTerm "lambda" s
   where
-    right t1 = show . PP.pretty $ restoreNames fctx (bctx, eval2 t2)
+    right t1 = show . PP.pretty $ restoreNames fctx $ eval2 (removeNames fctx t1)
       where
-        fctx       = freeVars t1
-        (bctx, t2) = removeNames fctx t1
+        fctx = freeVars t1
