@@ -22,7 +22,6 @@ import qualified Text.PrettyPrint.Leijen as PP ((<>), char, int, string, pretty,
 --
 type Sym = String
 
--- | Named terms.
 data Term1 =
   Var Sym
   | Abs Sym Term1
@@ -309,34 +308,55 @@ restoreNames = fun
 -- Abs2 (Abs2 (Abs2 (Var2 4)))
 --    
 termShift :: Int -> Term2 -> Term2
-termShift d = walk 0 
+termShift d = walk 0
   where
     walk :: Int -> Term2 -> Term2
-    walk c t'@(Var2 i) = if i >= c then Var2 (i+d) else t'
-    walk c (Abs2 t1) = Abs2 $ walk (c+1) t1
+    walk c (Var2 i)     = if i >= c then Var2 (i+d) else (Var2 i)
+    walk c (Abs2 t1)    = Abs2 $ walk (c+1) t1
     walk c (App2 t1 t2) = App2 (walk c t1) (walk c t2)
 
--- | Substitute s for index j in term t where j is always 0, 
---   effectively, substitute s for top level binding in t.
+-- | Add context in first arg to beginning of context in second arg.
+--   Context itself is a tree, so splicing means traversing tree in
+--   first arg to all leaf nodes and swapping in tree in second arg
+--   for empty node at the end.
+--
+-- >>> consCtxts (Node "z" [Node "" []]) (Node "" [Node "a" [Node "" []], Node "b" [Node "" []]])
+-- Node {rootLabel = "z", subForest = [Node {rootLabel = "", subForest = [Node {rootLabel = "a", subForest = [Node {rootLabel = "", subForest = []}]},Node {rootLabel = "b", subForest = [Node {rootLabel = "", subForest = []}]}]}]}
+--
+-- >>> consCtxts (Node "" [Node "a" [Node "" []], Node "b" [Node "" []]]) (Node "z" [Node "" []]) 
+-- Node {rootLabel = "", subForest = [Node {rootLabel = "a", subForest = [Node {rootLabel = "z", subForest = [Node {rootLabel = "", subForest = []}]}]},Node {rootLabel = "b", subForest = [Node {rootLabel = "z", subForest = [Node {rootLabel = "", subForest = []}]}]}]}
+--
+consCtxts :: Γ -> Γ -> Γ
+consCtxts a b = walk a
+  where
+    walk (Node "" [])      = b
+    walk (Node x [c])      = Node x [walk c]
+    walk (Node "" [c1,c2]) = Node "" [walk c1, walk c2]
+    walk n = error $ "consCtxts walk unexpected arg " ++ show n
+
+-- | Substitute s for index j in term t where j is always 0,
+--   and s is always an abstraction, effectively, substitute s
+--   for top level binding in t.
 --   Descend subterms in t counting up a binding level for
 --   each abstraction.  At terminal 'Var'(s) in t, if 'Var' index
 --   i equals binding depth, substitute with s, being careful
 --   to shift s by binding depth.
 --
---  >>> termSubst 0 (Abs2 (Var2 0)) (Abs2 (Var2 0))
+--  >>> snd $ termSubst 0 (Node "x" [Node "" []], Abs2 (Var2 0)) (Node "x" [Node "" []], Abs2 (Var2 0))
 --  Abs2 (Var2 0)
 -- 
-termSubst :: Int -> Term2 -> Term2 -> Term2
-termSubst 0 s@(Abs2 _) t = walk 0 t
+termSubst :: Int -> (Γ,Term2) -> (Γ,Term2) -> (Γ,Term2)
+termSubst 0 (c1, s@(Abs2 _)) t = walk 0 t
   where
-    walk :: Int -> Term2 -> Term2
-    walk c t'@(Var2 i)  = if i == 0 + c then termShift c s else t'
-    walk c (Abs2 t1)    = Abs2 $ walk (c+1) t1
-    walk c (App2 t1 t2) = App2 (walk c t1) (walk c t2)
-termSubst 0 s t = error $ "termSubst called with top level terms other than Abs2, s " ++ show s 
-termSubst n s t = error $ "termSubst called with non-zero index " ++ show n ++ " for terms s " ++ show s ++ " and t " ++ show t
+    walk :: Int -> (Γ,Term2) -> (Γ,Term2)
+    walk c (ctx, t'@(Var2 i))                 = if i == 0 + c then (consCtxts c1 ctx, termShift c s) else (ctx, t')
+    walk c (Node x [ctx], Abs2 t1)            = (Node x [ctx'], Abs2 t2) where (ctx', t2) = walk (c+1) (ctx, t1)
+    walk c (Node "" [ctx1, ctx2], App2 t1 t2) = (Node "" [ctx1', ctx2'], App2 t1' t2') where (ctx1', t1') = walk c (ctx1, t1); (ctx2', t2') = walk c (ctx2, t2)
+    walk c t = error $ "termSubst walk unexpected arg vals c " ++ show c ++ " t " ++ show t 
+termSubst 0 (_, s) t = error $ "termSubst called with top level terms other than Abs2, s " ++ show s 
+termSubst n (_, s) t = error $ "termSubst called with non-zero index " ++ show n ++ " for terms s " ++ show s ++ " and t " ++ show t
     
--- | Substitute s in t.  Called for application of t1
+-- | Substitute for s in t.  Called for application of t1
 --   and s--(t1 s)--where both t1 and s are abstractions
 --   and t is the term within abstraction t1.  s is value
 --   to substitute for top-level index 0 in t1.  Shift s
@@ -344,25 +364,16 @@ termSubst n s t = error $ "termSubst called with non-zero index " ++ show n ++ "
 --   in top-level term t1, then shift result back down
 --   by 1 to compensate.
 --
-βRed2 :: Term2 -> Term2 -> Term2
-βRed2 s@(Abs2 _) t = termShift (-1) $ termSubst 0 (termShift 1 s) t
+βRed2 :: (Γ,Term2) -> (Γ,Term2) -> (Γ,Term2)
+βRed2 (c1, s@(Abs2 _)) (c2, t) = (c3, termShift (-1) t2) where (c3, t2) = termSubst 0 (c1, termShift 1 s) (c2, t)
 βRed2 s t = error $ "βRed2 unexpected types for term s " ++ show  s ++ " or t " ++ show t
 
-nullCtx :: Γ -> Bool
-nullCtx (Node "" []) = True
-nullCtx _            = False
-
-termCtx :: Γ -> Bool
-termCtx (Node _ [c]) = nullCtx c
-
-ctxRed :: Γ -> Γ
-ctxRed (Node "" [c1@(Node _ c2), c3])   = if termCtx c1 then c3 else (Node "" (c2 ++ [c3]))
-ctxRed c = error $ "ctxRed unexpected context " ++ show c
-
+-- RHS of must be val (only val is Abs) to computation, else congruence.
+--
 eval2' :: (Γ,Term2) -> (Γ,Term2)
-eval2' (c, App2 t1@(Abs2 t12) v2@(Abs2 _)) = (c', βRed2 v2 t12) where c' = ctxRed c
-eval2' (c, App2 v1@(Abs2 _) t2)            = (c', App2 v1  t2') where (c',t2') = eval2' (c,t2)
-eval2' (c, App2 t1 t2)                     = (c', App2 t1' t2)  where (c',t1') = eval2' (c,t1)
+eval2' (Node _ [c1, c2], App2 (Abs2 t) s@(Abs2 _)) = (c', t') where (c', t')            = βRed2  (c1,s) (c2,t)
+eval2' (c, App2 v1@(Abs2 _) t2)                    = (c', App2  v1  t2') where (c',t2') = eval2' (c,t2)
+eval2' (c, App2 t1 t2)                             = (c', App2  t1' t2)  where (c',t1') = eval2' (c,t1)
 eval2' t@_ = t
 
 -- | Eval of nameless terms.
