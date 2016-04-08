@@ -1,3 +1,8 @@
+--
+-- TBD:
+--   * expand global var context to bind expressions to names
+--   * map Term1 and Term2 and eval and reduce to Data.Functor.Foldable (https://hackage.haskell.org/package/recursion-schemes) following http://dev.stephendiehl.com/hask/#recursion-schemes
+--
 module Lambda where
 {--
  Examples from "Types and Programming Languages" Benjamin Pierce.
@@ -5,11 +10,12 @@ module Lambda where
  2) Untyped lambda calculus with de Bruijn presentation and full beta reduction
  --}
 
-import           Control.Monad                 (liftM)
+import           Control.Monad                 (liftM, mapM)
 import           Data.Either                   (either)
-import           Data.List                     ((\\), elemIndices, intersect, sort, head, group)
+import           Data.List                     (elemIndices, sort, head, group, intersect, lookup, (\\))
 import           Data.Tree                     (Tree(..))
-import           Text.ParserCombinators.Parsec (Parser(..), (<|>), (<?>), many1, lower, char, parse, spaces, noneOf, letter, try)
+import           System.Environment            (getArgs)
+import           Text.ParserCombinators.Parsec (Parser(..), (<|>), (<?>), many, many1, endBy, sepBy, lower, char, eof, parse, spaces, newline, noneOf, letter, try, parseFromFile, choice)
 import qualified Text.PrettyPrint.Leijen as PP ((<>), char, int, string, pretty, Pretty(..))
 
 -------
@@ -87,7 +93,7 @@ freeVars (App t1 t2) = unique $ freeVars t1 ++ freeVars t2
   | otherwise = Var y
 βRed1 x s (Abs y t)
   | y /= x && notElem y (freeVars s) = Abs y (βRed1 x s t)
-  | otherwise                             = Abs y t
+  | otherwise                          = Abs y t
 βRed1 x s (App t1 t2) = App (βRed1 x s t1) (βRed1 x s t2)
 
 -- | Eval a 'Term1' "up to renaming of bound variables"
@@ -179,27 +185,34 @@ instance PP.Pretty Term2 where
 --   two-way split to parallel 'App's.  Traverse different paths under restore to regain
 --   unique naming context.
 --
-type Γ  = Tree Sym
+type Γ = Tree Sym
 
--- | Appends tree in second arg to end of straight line tree in first arg.  Used
+-- | Add context in first arg to beginning of context in second arg.
+--   Context itself is a tree, so splicing means traversing tree in
+--   first arg to all leaf nodes and swapping in tree in second arg
+--   for empty node at the end.
 --
---     * to append bound context to end of free context,
---     * to build up new context for an outer Abs over an inner context.
+-- >>> consCtxts (Node "z" [Node "" []]) (Node "" [Node "a" [Node "" []], Node "b" [Node "" []]])
+-- Node {rootLabel = "z", subForest = [Node {rootLabel = "", subForest = [Node {rootLabel = "a", subForest = [Node {rootLabel = "", subForest = []}]},Node {rootLabel = "b", subForest = [Node {rootLabel = "", subForest = []}]}]}]}
 --
---   Fails if tree in first arg has more than one branch.
+-- >>> consCtxts (Node "" [Node "a" [Node "" []], Node "b" [Node "" []]]) (Node "z" [Node "" []]) 
+-- Node {rootLabel = "", subForest = [Node {rootLabel = "a", subForest = [Node {rootLabel = "z", subForest = [Node {rootLabel = "", subForest = []}]}]},Node {rootLabel = "b", subForest = [Node {rootLabel = "z", subForest = [Node {rootLabel = "", subForest = []}]}]}]}
 --
---   >>> appendCtxts (Node {rootLabel = "l", subForest = [Node {rootLabel = "m", subForest = [Node {rootLabel = "n", subForest = [Node {rootLabel = "", subForest = []}]}]}]}) (Node {rootLabel = "a", subForest = [Node {rootLabel = "b", subForest = [Node {rootLabel = "c", subForest = [Node {rootLabel = "", subForest = []}]}]}]})
+--   >>> consCtxts (Node {rootLabel = "l", subForest = [Node {rootLabel = "m", subForest = [Node {rootLabel = "n", subForest = [Node {rootLabel = "", subForest = []}]}]}]}) (Node {rootLabel = "a", subForest = [Node {rootLabel = "b", subForest = [Node {rootLabel = "c", subForest = [Node {rootLabel = "", subForest = []}]}]}]})
 --   Node {rootLabel = "l", subForest = [Node {rootLabel = "m", subForest = [Node {rootLabel = "n", subForest = [Node {rootLabel = "a", subForest = [Node {rootLabel = "b", subForest = [Node {rootLabel = "c", subForest = [Node {rootLabel = "", subForest = []}]}]}]}]}]}]}
 --
-appendCtxts :: Γ -> Γ -> Γ
-appendCtxts (Node "" [])    bctx            = bctx
-appendCtxts (Node s [])     (Node s' ctxs)  = Node s [Node s' ctxs]
-appendCtxts (Node s [ctx])  bctx            = Node s [appendCtxts ctx bctx]
-appendCtxts n@_ dst                         = error $ "appendCtxts unrecognized source " ++ show n ++ " for dst " ++ show dst
+consCtxts :: Γ -> Γ -> Γ
+consCtxts a b = walk a
+  where
+    walk (Node "" [])      = b
+    walk (Node x  [])      = Node x [b]
+    walk (Node x  [c])     = Node x [walk c]
+    walk (Node "" [c1,c2]) = Node "" [walk c1, walk c2]
+    walk n = error $ "consCtxts walk unexpected arg " ++ show n
 
 removeNames' :: [Sym] -> Term1 -> (Γ,Term2)
 removeNames' path (Var s)     = (ctx,  Var2 i)       where i = last $ elemIndices s path; ctx = Node "" [] -- need to safeguard elemIndices returns [] e.g. free var not in list.
-removeNames' path (Abs s t)   = (ctx', Abs2 t')      where (ctx,t') = removeNames' (s:path) t; ctx' = appendCtxts (Node s []) ctx
+removeNames' path (Abs s t)   = (ctx', Abs2 t')      where (ctx,t') = removeNames' (s:path) t; ctx' = consCtxts (Node s []) ctx
 removeNames' path (App t1 t2) = (ctx', App2 t1' t2') where (ctx1, t1') = removeNames' path t1; (ctx2, t2') = removeNames' path t2; ctx' = Node "" [ctx1, ctx2]
                                                     
 -- | Convert 'Term1' to pair of context 'Γ' and (unnamed) 'Term2' for free vars ['Sym'].
@@ -315,25 +328,6 @@ termShift d = walk 0
     walk c (Abs2 t1)    = Abs2 $ walk (c+1) t1
     walk c (App2 t1 t2) = App2 (walk c t1) (walk c t2)
 
--- | Add context in first arg to beginning of context in second arg.
---   Context itself is a tree, so splicing means traversing tree in
---   first arg to all leaf nodes and swapping in tree in second arg
---   for empty node at the end.
---
--- >>> consCtxts (Node "z" [Node "" []]) (Node "" [Node "a" [Node "" []], Node "b" [Node "" []]])
--- Node {rootLabel = "z", subForest = [Node {rootLabel = "", subForest = [Node {rootLabel = "a", subForest = [Node {rootLabel = "", subForest = []}]},Node {rootLabel = "b", subForest = [Node {rootLabel = "", subForest = []}]}]}]}
---
--- >>> consCtxts (Node "" [Node "a" [Node "" []], Node "b" [Node "" []]]) (Node "z" [Node "" []]) 
--- Node {rootLabel = "", subForest = [Node {rootLabel = "a", subForest = [Node {rootLabel = "z", subForest = [Node {rootLabel = "", subForest = []}]}]},Node {rootLabel = "b", subForest = [Node {rootLabel = "z", subForest = [Node {rootLabel = "", subForest = []}]}]}]}
---
-consCtxts :: Γ -> Γ -> Γ
-consCtxts a b = walk a
-  where
-    walk (Node "" [])      = b
-    walk (Node x [c])      = Node x [walk c]
-    walk (Node "" [c1,c2]) = Node "" [walk c1, walk c2]
-    walk n = error $ "consCtxts walk unexpected arg " ++ show n
-
 -- | Substitute s for index j in term t where j is always 0,
 --   and s is always an abstraction, effectively, substitute s
 --   for top level binding in t.
@@ -367,6 +361,14 @@ termSubst n (_, s) t = error $ "termSubst called with non-zero index " ++ show n
 βRed2 :: (Γ,Term2) -> (Γ,Term2) -> (Γ,Term2)
 βRed2 (c1, s@(Abs2 _)) (c2, t) = (c3, termShift (-1) t2) where (c3, t2) = termSubst 0 (c1, termShift 1 s) (c2, t)
 βRed2 s t = error $ "βRed2 unexpected types for term s " ++ show  s ++ " or t " ++ show t
+
+-- | Environment is an associative list of symbols which may or may not have an associated term.
+--   Initialized in file with syntax e.g.
+--     id = λx.x;
+--     y;
+--     z;
+-- 
+type Env = [(Sym, (Maybe Term1))]
 
 -- RHS of must be val (only val is Abs) to computation, else congruence.
 --
@@ -423,7 +425,7 @@ eval2 p@(_, t1) = if t1 == t2 then p' else eval2 p' where p'@(_, t2) = eval2' p
 -- Right "id"
 --
 parseId :: Parser Sym
-parseId = many1 (noneOf "λ.() ")
+parseId = many1 (noneOf "λ.();\n ")
 
 -- | 'Var' just wraps id.
 -- 
@@ -447,17 +449,6 @@ parseVar = liftM Var parseId
 parseAbs :: Parser Term1
 parseAbs = char 'λ' >> parseId >>= \v -> spaces >> char '.' >> spaces >> parseTerm >>= \e -> return $ Abs v e
 
--- | Parse a Term 
--- 
--- >>> parse parseTerm "lambda" "(λx.x)y"
--- Right (App (Abs "x" (Var "x")) (Var "y"))
---
--- >>> parse parseTerm "lambda" "λx.x y"
--- Right (Abs "x" (App (Var "x") (Var "y")))
---
-parseTerm :: Parser Term1
-parseTerm = parseAppTerm <|> parseAbs
-
 -- | One or more in a row, nested left.
 --
 -- >>> parse parseAppTerm "test" "x y"
@@ -480,6 +471,31 @@ parseAppTerm = liftM (foldl1 App) (many1 parseATerm)
 parseATerm :: Parser Term1
 parseATerm = (char '(' >> parseTerm >>= \e -> char ')' >> spaces >> return e) <|> (parseVar >>= \v -> spaces >> return v)
 
+-- | Parse a Term 
+-- 
+-- >>> parse parseTerm "lambda" "(λx.x)y"
+-- Right (App (Abs "x" (Var "x")) (Var "y"))
+--
+-- >>> parse parseTerm "lambda" "λx.x y"
+-- Right (Abs "x" (App (Var "x") (Var "y")))
+--
+parseTerm :: Parser Term1
+parseTerm = parseAppTerm <|> parseAbs
+
+data Command = TermCommand Term1 | BinderCommand Sym Term1 deriving (Eq, Show)
+
+parseTermCommand :: Parser Command
+parseTermCommand = liftM TermCommand parseTerm <?> "term command"
+
+parseBinderCommand :: Parser Command
+parseBinderCommand = parseId >>= \i -> spaces >> char '=' >> spaces >> parseTerm >>= \t -> return (BinderCommand i t) <?> "binder command"
+
+parseCommand :: Parser Command
+parseCommand = parseBinderCommand <|> parseTermCommand <?> "command"
+
+parseFile :: Parser [Command]
+parseFile = parseCommand `endBy` choice [eof, (newline >> return ()), (char ';' >> newline >> return ())]
+                                  
 -- | Evaluator for named lambda expression.  Convert to unnamed.  Evaluate.  Restore names.  Pretty print.
 --  
 -- >>> either (PP.string. show) (\t -> PP.pretty (restoreNames [] (eval2 (removeNames [] t)))) (parse parseTerm "lambda" "((λx.x) (λx.x))")
@@ -491,3 +507,24 @@ evalStr s = either show right $ parse parseTerm "lambda" s
     right t1 = show . PP.pretty $ restoreNames fctx $ eval2 (removeNames fctx t1)
       where
         fctx = freeVars t1
+
+evalCommands :: [Command] -> String
+evalCommands _ = ""
+
+-- | Parser for file with list of lines, converted to [Command], which then gets
+--   split into environment with assoc list of sym with term and a list of terms
+--   to evaluate in the context of the environment, e.g.
+--
+--   id = λx.x
+--   (id id)
+--
+readFile' :: String -> IO ()
+readFile' fName = do
+  parseOut  <- parseFromFile parseFile fName
+  putStrLn $ either show show parseOut
+  
+readFile :: IO ()
+readFile = do
+  [fName,_] <- getArgs
+  parseOut  <- parseFromFile (many1 parseCommand) fName
+  putStrLn $ either show show parseOut 
