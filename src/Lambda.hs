@@ -10,7 +10,7 @@ module Lambda where
  2) Untyped lambda calculus with de Bruijn presentation and full beta reduction
  --}
 
-import           Control.Monad                 (liftM, mapM)
+import           Control.Monad                 (liftM, mapM_, void)
 import           Data.Either                   (either)
 import           Data.List                     (elemIndices, sort, head, group, intersect, lookup, (\\))
 import           Data.Tree                     (Tree(..))
@@ -324,7 +324,7 @@ termShift :: Int -> Term2 -> Term2
 termShift d = walk 0
   where
     walk :: Int -> Term2 -> Term2
-    walk c (Var2 i)     = if i >= c then Var2 (i+d) else (Var2 i)
+    walk c (Var2 i)     = if i >= c then Var2 (i+d) else Var2 i
     walk c (Abs2 t1)    = Abs2 $ walk (c+1) t1
     walk c (App2 t1 t2) = App2 (walk c t1) (walk c t2)
 
@@ -362,14 +362,6 @@ termSubst n (_, s) t = error $ "termSubst called with non-zero index " ++ show n
 βRed2 (c1, s@(Abs2 _)) (c2, t) = (c3, termShift (-1) t2) where (c3, t2) = termSubst 0 (c1, termShift 1 s) (c2, t)
 βRed2 s t = error $ "βRed2 unexpected types for term s " ++ show  s ++ " or t " ++ show t
 
--- | Environment is an associative list of symbols which may or may not have an associated term.
---   Initialized in file with syntax e.g.
---     id = λx.x;
---     y;
---     z;
--- 
-type Env = [(Sym, (Maybe Term1))]
-
 -- RHS of must be val (only val is Abs) to computation, else congruence.
 --
 eval2' :: (Γ,Term2) -> (Γ,Term2)
@@ -402,11 +394,37 @@ eval2' t@_ = t
 --
 --  (Page 79).
 --
--- >>> PP.pretty $ restoreNames [] (eval2 (removeNames [] (App (Abs "x" (Var "x")) (Abs "x" (Var "x")))))
+ -- >>> PP.pretty $ restoreNames [] (eval2 (removeNames [] (App (Abs "x" (Var "x")) (Abs "x" (Var "x")))))
 -- λx.x
 --
 eval2 :: (Γ,Term2) -> (Γ,Term2)
 eval2 p@(_, t1) = if t1 == t2 then p' else eval2 p' where p'@(_, t2) = eval2' p
+
+-- | Environment is an associative list of symbols which may or may not have an associated term.
+--   Initialized in file with syntax e.g.
+--     id = λx.x;
+--     (id id);
+-- 
+type Env2 = [(Sym, (Γ,Term2))]
+
+subst :: Env2 -> (Γ,Term2) -> (Γ,Term2)
+subst es p@(c, v@(Var2 i)) = if i < length es then (c'', t) else p where (_, (c', t)) = es !! i; c'' = consCtxts c c'
+subst _ p                  = p
+
+eval2subst' :: Env2 -> (Γ,Term2) -> (Γ,Term2)
+eval2subst' e (Node _ [c1, c2], App2 (Abs2 t) s@(Abs2 _)) = (c', t') where (c', t')            = βRed2  (c1,s) (c2,t)
+eval2subst' e (c, App2 v1@(Abs2 _) t2)                    = (c', App2  v1  t2') where (c',t2') = eval2subst' e $ subst e (c,t2)
+eval2subst' e (c, App2 t1 t2)                             = (c', App2  t1' t2)  where (c',t1') = eval2subst' e $ subst e (c,t1)
+eval2subst' e t@_ = t
+
+-- | Stop at point of recurring to self.
+--   TBD: "un"substitute back to Env2 symbols from concluding reduction,
+--   search t2 in p'@(_, t2) for matches against RHS of env, replacing
+--   matches with symbol from env.
+--   TBD: count terms to avoid co-recursion/unfold.
+--
+eval2subst :: Env2 -> (Γ,Term2) -> (Γ,Term2)
+eval2subst env p@(_, t1) = if t1 == t2 then p' else eval2subst env p' where p'@(_, t2) = eval2subst' env p
 
 -----------
 -- Parse --
@@ -494,8 +512,8 @@ parseCommand :: Parser Command
 parseCommand = parseBinderCommand <|> parseTermCommand <?> "command"
 
 parseFile :: Parser [Command]
-parseFile = parseCommand `endBy` choice [eof, (newline >> return ()), (char ';' >> newline >> return ())]
-                                  
+parseFile = parseCommand `endBy` choice [eof, void newline, char ';' >> void newline]
+
 -- | Evaluator for named lambda expression.  Convert to unnamed.  Evaluate.  Restore names.  Pretty print.
 --  
 -- >>> either (PP.string. show) (\t -> PP.pretty (restoreNames [] (eval2 (removeNames [] t)))) (parse parseTerm "lambda" "((λx.x) (λx.x))")
@@ -508,9 +526,25 @@ evalStr s = either show right $ parse parseTerm "lambda" s
       where
         fctx = freeVars t1
 
-evalCommands :: [Command] -> String
-evalCommands _ = ""
+termCommand2Term1s :: Command -> [Term1]
+termCommand2Term1s (TermCommand t1) = [t1]
+termCommand2Term1s _                = []
 
+binderCommand2Env2 :: Command -> Env2
+binderCommand2Env2 (BinderCommand s t) = [(s, removeNames [] t)]
+binderCommand2Env2 _                   = []
+
+evalTerm1 ::  Env2 -> Term1 -> String
+evalTerm1 env t1 = show . PP.pretty $ restoreNames syms $ eval2subst env (removeNames syms t1)
+  where
+    syms = map fst env
+
+evalCommands :: [Command] -> [String]
+evalCommands cmds = map (evalTerm1 env) t1s
+  where
+    t1s  = concatMap termCommand2Term1s cmds
+    env  = concatMap binderCommand2Env2 cmds
+    
 -- | Parser for file with list of lines, converted to [Command], which then gets
 --   split into environment with assoc list of sym with term and a list of terms
 --   to evaluate in the context of the environment, e.g.
@@ -520,11 +554,8 @@ evalCommands _ = ""
 --
 readFile' :: String -> IO ()
 readFile' fName = do
-  parseOut  <- parseFromFile parseFile fName
-  putStrLn $ either show show parseOut
+  cmds  <- parseFromFile parseFile fName
+  either print (mapM_ putStrLn . evalCommands) cmds
   
 readFile :: IO ()
-readFile = do
-  [fName,_] <- getArgs
-  parseOut  <- parseFromFile (many1 parseCommand) fName
-  putStrLn $ either show show parseOut 
+readFile = getArgs >>= \[fName,_] -> readFile' fName
