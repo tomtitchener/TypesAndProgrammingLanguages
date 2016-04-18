@@ -28,6 +28,8 @@ NB quote, page 88:  "Just because you've implemented something doesn't mean you 
 
 module Untyped where
 
+import           Debug.Trace
+
 import           Control.Monad                 (liftM, mapM_, void)
 import           Data.Either                   (either)
 import           Data.List                     (elemIndices, sort, head, group, intersect, lookup, (\\))
@@ -231,7 +233,11 @@ consCtxts a b = walk a
     walk (Node x  [])      = Node x [b]
     walk (Node x  [c])     = Node x [walk c]
     walk (Node "" [c1,c2]) = Node "" [walk c1, walk c2]
-    walk n = error $ "consCtxts walk unexpected arg " ++ show n
+    walk ctx = error $ "consCtxts walk unexpected arg " ++ show ctx
+
+tailCtxt :: Γ -> Γ
+tailCtxt (Node _ [c]) = c
+tailCtxt ctx = error $ "tailCtxt unexpected arg " ++ show ctx
 
 -- | Safeguarded replacement of Term1 with pair <naming context, Term2> 
 --   where test of free vars guarantees @elemIndices s path@ does not
@@ -261,7 +267,7 @@ removeNames' path (App t1 t2) = (ctx', App2 t1' t2') where (ctx1, t1') = removeN
 --
 removeNames :: [Sym] -> Term1 -> (Γ,Term2)
 removeNames fvars t1
-  | fvars `intersect` fvars' /= fvars' = error $ "removeNames not all vars free in " ++ show t1 ++ "" ++ show fvars' ++ " are included in " ++ show fvars
+  | sort (fvars `intersect` fvars') /= (sort fvars') = error $ "removeNames not all vars free in (" ++ show t1 ++ "), i.e. " ++ show fvars' ++ ", are included in " ++ show fvars ++ " " ++ show fvars'
   | otherwise = (bctx, t2)
   where
     fvars'     = freeVars t1
@@ -373,6 +379,7 @@ termSubst 0 (c1, s@(Abs2 _)) t = walk 0 t
   where
     walk :: Int -> (Γ,Term2) -> (Γ,Term2)
     walk c (c2, t'@(Var2 i))                  = if i == 0 + c then (c2, termShift c s) else (c2, t')
+--  walk c (c2, t'@(Var2 i))                  = if i == 0 + c then trace ("tailCtxt c1 " ++ show (tailCtxt c1) ++ " c2 " ++ show c2) (consCtxts (tailCtxt c1) c2, termShift c s) else (c2, t')
     walk c (Node x [ctx], Abs2 t1)            = (Node x [ctx'], Abs2 t2) where (ctx', t2) = walk (c+1) (ctx, t1)
     walk c (Node "" [ctx1, ctx2], App2 t1 t2) = (Node "" [ctx1', ctx2'], App2 t1' t2') where (ctx1', t1') = walk c (ctx1, t1); (ctx2', t2') = walk c (ctx2, t2)
     walk c t = error $ "termSubst walk unexpected arg vals c " ++ show c ++ " t " ++ show t 
@@ -400,19 +407,19 @@ termSubst n (_, s) t = error $ "termSubst called with non-zero index " ++ show n
 --   (id id);
 --   @
 -- 
-type Env2 = [(Sym, (Γ,Term2))]
+type Env = [(Sym, (Γ,Term2))]
 
 -- | At leaf of 'Term2', check for match of name for 'Var2' in
---   list of free vars in 'Env2'.  If there's a match, substitute
---   'Term2' from 'Env2' for 'Var2' and splice context for 'Term2'
---   from 'Env2'.  Relies on 'TermShift' to increase de Bruijn 
+--   list of free vars in 'Env'.  If there's a match, substitute
+--   'Term2' from 'Env' for 'Var2' and splice context for 'Term2'
+--   from 'Env'.  Relies on 'TermShift' to increase de Bruijn 
 --   indexes for bound vars and not free vars.
 -- 
-subst :: Env2 -> (Γ,Term2) -> (Γ,Term2)
+subst :: Env -> (Γ,Term2) -> (Γ,Term2)
 subst es p@(c, v@(Var2 i)) = if i < length es then (c'', t) else p where (_, (c', t)) = es !! i; c'' = consCtxts c c'
 subst _ p                  = p
 
-eval2' :: Env2 -> (Γ,Term2) -> (Γ,Term2)
+eval2' :: Env -> (Γ,Term2) -> (Γ,Term2)
 eval2' e (Node _ [c1, c2], App2 (Abs2 t) s@(Abs2 _)) = (c', t') where (c', t')            = βRed2  (c1,s) (c2,t)        -- E-AppAbs
 eval2' e (c,               App2 v1@(Abs2 _) t2)      = (c', App2  v1  t2') where (c',t2') = eval2' e $ subst e (c,t2)   -- E-App2
 eval2' e (c,               App2 t1 t2)               = (c', App2  t1' t2)  where (c',t1') = eval2' e $ subst e (c,t1)   -- E-App1
@@ -422,17 +429,23 @@ eval2' e t@_ = t
 --   evaluation of nameless term following Figure 5.3 "Untyped lambda calculus (λ)".
 --   Stops at point of recurring to self.
 --
---   Carry contexts for 1) free variables 'Env2' and 2) names for terms in 'Term2' (Γ)
+--   Carry contexts for 1) free variables 'Env' and 2) names for terms in 'Term2' (Γ)
 --   through evaluation of input 'Term2' to resolve terminal 'Var2' to 'Term2' for free
 --   vars and to update context for names during 'βRed2'.
 -- 
---   TBD: "un"substitute back to Env2 symbols from concluding reduction,
+--   TBD: "un"substitute back to Env symbols from concluding reduction,
 --   search t2 in p'@(_, t2) for matches against RHS of env, replacing
 --   matches with symbol from env.
 --
---   TBD: count terms to avoid co-recursion/unfold.
+--   TBD: count terms to avoid co-recursion/unfold?
 --
-eval2 :: Env2 -> (Γ,Term2) -> (Γ,Term2)
+--   Call-by-value example, page 55:
+--
+-- >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (evalCommands cmds)) (parse parseCommands "lambda" "id = λx.x;\n(id (id (λz. id z)));\n")
+-- λz.(id z)
+--
+--
+eval2 :: Env -> (Γ,Term2) -> (Γ,Term2)
 eval2 env p@(_, t1) = if t1 == t2 then p' else eval2 env p' where p'@(_, t2) = eval2' env p
 
 -----------
@@ -521,35 +534,30 @@ parseCommand = parseBinderCommand <|> parseTermCommand <?> "command"
 parseCommands :: Parser [Command]
 parseCommands = parseCommand `endBy` choice [eof, void newline, char ';' >> void newline]
 
--- | Evaluator for named lambda expression.  Convert to unnamed.  Evaluate.  Restore names.  Pretty print.
---  
--- >>> either (PP.string . show) (\t -> PP.pretty (restoreNames [] (eval2 [] (removeNames [] t)))) (parse parseTerm "lambda" "((λx.x) (λx.x))")
--- λx.x
---
-evalStr :: String -> String
-evalStr s = either show right $ parse parseTerm "lambda" s
-  where
-    right t1 = show . PP.pretty $ restoreNames fctx $ eval2 [] (removeNames fctx t1)
-      where
-        fctx = freeVars t1
-
 termCommand2Term1s :: Command -> [Term1]
 termCommand2Term1s (TermCommand t1) = [t1]
 termCommand2Term1s _                = []
 
-binderCommand2Env2 :: Command -> Env2
-binderCommand2Env2 (BinderCommand s t) = [(s, removeNames [] t)]
-binderCommand2Env2 _                   = []
+binderCommand2Env :: Command -> Env
+binderCommand2Env (BinderCommand s t) = [(s, removeNames [] t)]
+binderCommand2Env _                   = []
 
-evalTerm1 ::  Env2 -> Term1 -> String
+-- | Given 'Env' with global environment of assoc list of 'Sym' to 'Term2' and 'Term1',
+--   use 'Sym' from 'Env' for free vars to remove names from 'Term1', creating tuple '(Γ,Term2)',
+--   then restore names using free vars and updated '(Γ,Term2)' from 'eval2' and pretty-print
+--   the result.
+evalTerm1 ::  Env -> Term1 -> String
 evalTerm1 env t1 = show . PP.pretty $ restoreNames syms $ eval2 env (removeNames syms t1)
   where
     syms = map fst env
 
+-- | Separate binders from terms in '[Command]' and then evaluate all terms using
+--   free vars with terms in binders and answer the list of resulting terms.
+--    
 evalCommands :: [Command] -> [String]
 evalCommands cmds = map (evalTerm1 env) t1s
   where
-    env  = concatMap binderCommand2Env2 cmds
+    env  = concatMap binderCommand2Env cmds
     t1s  = concatMap termCommand2Term1s cmds
 
 -- | Parser for file with list of lines, converted to [Command], which then gets

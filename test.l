@@ -1,7 +1,11 @@
 id = (λx.x);
+tru = (λt.λf.t);
+fls = (λt.λf.f);
+test = (λl.λm.λn. l m n);
 zero = (λs.λz.z);
 one = (λs.λz.s z);
 two = (λs.λz.s (s z));
 three = (λs.λz.s (s (s z)));
 (id (id (λz. id z)));
 (id id);
+((λt.λf.t) (λx.x));
