@@ -343,7 +343,7 @@ termSubst :: Int -> (Γ,Term2) -> (Γ,Term2) -> (Γ,Term2)
 termSubst 0 (c1, s@(Abs2 _)) t = walk 0 t
   where
     walk :: Int -> (Γ,Term2) -> (Γ,Term2)
-    walk c (ctx, t'@(Var2 i))                 = if i == 0 + c then (consCtxts c1 ctx, termShift c s) else (ctx, t')
+    walk c (c2, t'@(Var2 i))                  = if i == 0 + c then (c2, termShift c s) else (c2, t')
     walk c (Node x [ctx], Abs2 t1)            = (Node x [ctx'], Abs2 t2) where (ctx', t2) = walk (c+1) (ctx, t1)
     walk c (Node "" [ctx1, ctx2], App2 t1 t2) = (Node "" [ctx1', ctx2'], App2 t1' t2') where (ctx1', t1') = walk c (ctx1, t1); (ctx2', t2') = walk c (ctx2, t2)
     walk c t = error $ "termSubst walk unexpected arg vals c " ++ show c ++ " t " ++ show t 
@@ -412,16 +412,16 @@ subst es p@(c, v@(Var2 i)) = if i < length es then (c'', t) else p where (_, (c'
 subst _ p                  = p
 
 eval2subst' :: Env2 -> (Γ,Term2) -> (Γ,Term2)
-eval2subst' e (Node _ [c1, c2], App2 (Abs2 t) s@(Abs2 _)) = (c', t') where (c', t')            = βRed2  (c1,s) (c2,t)
-eval2subst' e (c, App2 v1@(Abs2 _) t2)                    = (c', App2  v1  t2') where (c',t2') = eval2subst' e $ subst e (c,t2)
-eval2subst' e (c, App2 t1 t2)                             = (c', App2  t1' t2)  where (c',t1') = eval2subst' e $ subst e (c,t1)
+eval2subst' e (Node _ [c1, c2], App2 (Abs2 t) s@(Abs2 _)) = (c', t') where (c', t')            = βRed2  (c1,s) (c2,t)             -- E-AppAbs
+eval2subst' e (c,               App2 v1@(Abs2 _) t2)      = (c', App2  v1  t2') where (c',t2') = eval2subst' e $ subst e (c,t2)   -- E-App2
+eval2subst' e (c,               App2 t1 t2)               = (c', App2  t1' t2)  where (c',t1') = eval2subst' e $ subst e (c,t1)   -- E-App1
 eval2subst' e t@_ = t
 
 -- | Stop at point of recurring to self.
 --   TBD: "un"substitute back to Env2 symbols from concluding reduction,
 --   search t2 in p'@(_, t2) for matches against RHS of env, replacing
 --   matches with symbol from env.
---   TBD: count terms to avoid co-recursion/unfold.
+--   TBD: count terms to avoid co-recursion/unfold?
 --
 eval2subst :: Env2 -> (Γ,Term2) -> (Γ,Term2)
 eval2subst env p@(_, t1) = if t1 == t2 then p' else eval2subst env p' where p'@(_, t2) = eval2subst' env p
@@ -542,9 +542,9 @@ evalTerm1 env t1 = show . PP.pretty $ restoreNames syms $ eval2subst env (remove
 evalCommands :: [Command] -> [String]
 evalCommands cmds = map (evalTerm1 env) t1s
   where
-    t1s  = concatMap termCommand2Term1s cmds
     env  = concatMap binderCommand2Env2 cmds
-    
+    t1s  = concatMap termCommand2Term1s cmds
+
 -- | Parser for file with list of lines, converted to [Command], which then gets
 --   split into environment with assoc list of sym with term and a list of terms
 --   to evaluate in the context of the environment, e.g.
