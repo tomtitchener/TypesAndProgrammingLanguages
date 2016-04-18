@@ -5,7 +5,7 @@
  --}
 module Main where
 
-import Lambda
+import Untyped
 
 main :: IO ()
 main = undefined
