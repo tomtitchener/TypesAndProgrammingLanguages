@@ -239,12 +239,20 @@ tailCtxt :: Γ -> Γ
 tailCtxt (Node _ [c]) = c
 tailCtxt ctx = error $ "tailCtxt unexpected arg " ++ show ctx
 
+{--
+validCtxtTerm :: Int -> Int -> (Γ,Term2) -> (Γ,Term2)
+validCtxtTerm l i p@(Node "" [],          Var2 _)   = p
+validCtxtTerm l i p@(Node _ [_],          Abs2 _)   = p
+validCtxtTerm l i p@(Node "" [_, _],      App2 _ _) = p
+validCtxtTerm l i (n, t) = error $ "validCtxtTerm l " ++ show l ++ " i " ++ show i ++ " invalid ctxt " ++ show n ++ " for term " ++ show t
+--}
+
 -- | Safeguarded replacement of Term1 with pair <naming context, Term2> 
 --   where test of free vars guarantees @elemIndices s path@ does not
 --   answer empty list.
 removeNames' :: [Sym] -> Term1 -> (Γ,Term2)
-removeNames' path (Var s) = (ctx, Var2 i)            where i = last (elemIndices s path); ctx = Node "" []
-removeNames' path (Abs s t)   = (ctx', Abs2 t')      where (ctx,t') = removeNames' (s:path) t; ctx' = consCtxts (Node s []) ctx
+removeNames' path (Var s)     = (ctx, Var2 i)        where i = last (elemIndices s path); ctx = Node "" []
+removeNames' path (Abs s t)   = (ctx', Abs2 t')      where (ctx, t') = removeNames' (s:path) t; ctx' = Node s [ctx]
 removeNames' path (App t1 t2) = (ctx', App2 t1' t2') where (ctx1, t1') = removeNames' path t1; (ctx2, t2') = removeNames' path t2; ctx' = Node "" [ctx1, ctx2]
                                                     
 -- | Convert 'Term1' to pair of context 'Γ' and (unnamed) 'Term2' for free vars ['Sym'],
@@ -267,11 +275,10 @@ removeNames' path (App t1 t2) = (ctx', App2 t1' t2') where (ctx1, t1') = removeN
 --
 removeNames :: [Sym] -> Term1 -> (Γ,Term2)
 removeNames fvars t1
-  | sort (fvars `intersect` fvars') /= (sort fvars') = error $ "removeNames not all vars free in (" ++ show t1 ++ "), i.e. " ++ show fvars' ++ ", are included in " ++ show fvars ++ " " ++ show fvars'
-  | otherwise = (bctx, t2)
+  | sort (fvars `intersect` fvars') /= sort fvars' = error $ "removeNames not all vars free in (" ++ show t1 ++ "), i.e. " ++ show fvars' ++ ", are included in " ++ show fvars ++ " " ++ show fvars'
+  | otherwise = removeNames' fvars t1
   where
-    fvars'     = freeVars t1
-    (bctx, t2) = removeNames' fvars t1
+    fvars' = freeVars t1
                                                     
 -- | Convert (unnamed) 'Term2' to 'Term1' for free vars ['Sym'] and context 'Γ'.
 --
@@ -378,13 +385,13 @@ termSubst :: Int -> (Γ,Term2) -> (Γ,Term2) -> (Γ,Term2)
 termSubst 0 (c1, s@(Abs2 _)) t = walk 0 t
   where
     walk :: Int -> (Γ,Term2) -> (Γ,Term2)
-    walk c p@(_, (Var2 i))                    = if i == 0 + c then (c1, termShift c s) else p
-    walk c (Node x [ctx], Abs2 t1)            = (Node x [ctx'], Abs2 t2) where (ctx', t2) = walk (c+1) (ctx, t1)
+    walk c p@(_,                  Var2 i)     = if i == 0 + c then (c1, termShift c s) else p
+    walk c (Node x [ctx],         Abs2 t1)    = (Node x [ctx'], Abs2 t2) where (ctx', t2) = walk (c+1) (ctx, t1)
     walk c (Node "" [ctx1, ctx2], App2 t1 t2) = (Node "" [ctx1', ctx2'], App2 t1' t2') where (ctx1', t1') = walk c (ctx1, t1); (ctx2', t2') = walk c (ctx2, t2)
     walk c t = error $ "termSubst walk unexpected arg vals c " ++ show c ++ " t " ++ show t 
 termSubst 0 (_, s) t = error $ "termSubst called with top level terms other than Abs2, s " ++ show s 
 termSubst n (_, s) t = error $ "termSubst called with non-zero index " ++ show n ++ " for terms s " ++ show s ++ " and t " ++ show t
-    
+
 -- | Substitute 'Term2 s' in first argument in inner term of 'Term2 t'
 --   in second argument.  Implements application of t1 and s--(t1 s)--where
 --   both t1 and s are abstractions and t is the term within abstraction t1.
@@ -415,13 +422,13 @@ type Env = [(Sym, (Γ,Term2))]
 --   indexes for bound vars and not free vars.
 -- 
 subst :: Env -> (Γ,Term2) -> (Γ,Term2)
-subst es p@(c, v@(Var2 i)) = if i < length es then (c'', t) else p where (_, (c', t)) = es !! i; c'' = consCtxts c c'
-subst _ p                  = p
+subst es p@(_, v@(Var2 i)) = if i < length es then snd (es !! i) else p 
+subst _  p                 = p
 
 eval2' :: Env -> (Γ,Term2) -> (Γ,Term2)
-eval2' e (Node _ [c1, c2], App2 t@(Abs2 _) s@(Abs2 _)) = (c', t') where (c', t')            = βRed2  (c2,s) (c1,t)        -- E-AppAbs
-eval2' e (c,               App2 v1@(Abs2 _) t2)        = (c', App2  v1  t2') where (c',t2') = eval2' e $ subst e (c,t2)   -- E-App2
-eval2' e (c,               App2 t1 t2)                 = (c', App2  t1' t2)  where (c',t1') = eval2' e $ subst e (c,t1)   -- E-App1
+eval2' e (Node "" [c1, c2], App2 t@(Abs2 _) s@(Abs2 _)) = βRed2  (c2,s) (c1,t)                                                             -- E-AppAbs
+eval2' e (Node "" [c1, c2], App2 v1@(Abs2 _) t2)        = (Node "" [c1, c2'], App2  v1  t2') where (c2',t2') = eval2' e $ subst e (c2,t2)  -- E-App2
+eval2' e (Node "" [c1, c2], App2 t1 t2)                 = (Node "" [c1', c2], App2  t1' t2)  where (c1',t1') = eval2' e $ subst e (c1,t1)  -- E-App1
 eval2' e t@_ = t
 
 -- | Call-by-value operational semantics ("Operational Symantics", page 55) for 
