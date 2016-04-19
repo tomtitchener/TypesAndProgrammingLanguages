@@ -364,7 +364,7 @@ termShift d = walk 0
 
 -- | Substitute s for index j in term t where j is always 0,
 --   and s is always an abstraction, effectively, substitute s
---   for top level binding in t.
+--   for all top level bindings in t, recursively.
 --    
 --   Descend subterms in t counting up a binding level for
 --   each abstraction.  At terminal 'Var'(s) in t, if 'Var' index
@@ -373,13 +373,12 @@ termShift d = walk 0
 --
 --  >>> snd $ termSubst 0 (Node "x" [Node "" []], Abs2 (Var2 0)) (Node "x" [Node "" []], Abs2 (Var2 0))
 --  Abs2 (Var2 0)
--- 
+--
 termSubst :: Int -> (Γ,Term2) -> (Γ,Term2) -> (Γ,Term2)
 termSubst 0 (c1, s@(Abs2 _)) t = walk 0 t
   where
     walk :: Int -> (Γ,Term2) -> (Γ,Term2)
-    walk c (c2, t'@(Var2 i))                  = if i == 0 + c then (c2, termShift c s) else (c2, t')
---  walk c (c2, t'@(Var2 i))                  = if i == 0 + c then trace ("tailCtxt c1 " ++ show (tailCtxt c1) ++ " c2 " ++ show c2) (consCtxts (tailCtxt c1) c2, termShift c s) else (c2, t')
+    walk c p@(_, (Var2 i))                    = if i == 0 + c then (c1, termShift c s) else p
     walk c (Node x [ctx], Abs2 t1)            = (Node x [ctx'], Abs2 t2) where (ctx', t2) = walk (c+1) (ctx, t1)
     walk c (Node "" [ctx1, ctx2], App2 t1 t2) = (Node "" [ctx1', ctx2'], App2 t1' t2') where (ctx1', t1') = walk c (ctx1, t1); (ctx2', t2') = walk c (ctx2, t2)
     walk c t = error $ "termSubst walk unexpected arg vals c " ++ show c ++ " t " ++ show t 
@@ -395,7 +394,7 @@ termSubst n (_, s) t = error $ "termSubst called with non-zero index " ++ show n
 --   top-level term t1, then shift result back down by 1 to compensate.
 --
 βRed2 :: (Γ,Term2) -> (Γ,Term2) -> (Γ,Term2)
-βRed2 (c1, s@(Abs2 _)) (c2, t) = (c3, termShift (-1) t2) where (c3, t2) = termSubst 0 (c1, termShift 1 s) (c2, t)
+βRed2 (c1, s@(Abs2 _)) (Node _ [c2], Abs2 t) = (c3, termShift (-1) t2) where (c3, t2) = termSubst 0 (c1, termShift 1 s) (c2, t)
 βRed2 s t = error $ "βRed2 unexpected types for term s " ++ show  s ++ " or t " ++ show t
 
 -- | Environment is an assoc list of symbols with context and 'Term2' tuples.
@@ -420,9 +419,9 @@ subst es p@(c, v@(Var2 i)) = if i < length es then (c'', t) else p where (_, (c'
 subst _ p                  = p
 
 eval2' :: Env -> (Γ,Term2) -> (Γ,Term2)
-eval2' e (Node _ [c1, c2], App2 (Abs2 t) s@(Abs2 _)) = (c', t') where (c', t')            = βRed2  (c1,s) (c2,t)        -- E-AppAbs
-eval2' e (c,               App2 v1@(Abs2 _) t2)      = (c', App2  v1  t2') where (c',t2') = eval2' e $ subst e (c,t2)   -- E-App2
-eval2' e (c,               App2 t1 t2)               = (c', App2  t1' t2)  where (c',t1') = eval2' e $ subst e (c,t1)   -- E-App1
+eval2' e (Node _ [c1, c2], App2 t@(Abs2 _) s@(Abs2 _)) = (c', t') where (c', t')            = βRed2  (c2,s) (c1,t)        -- E-AppAbs
+eval2' e (c,               App2 v1@(Abs2 _) t2)        = (c', App2  v1  t2') where (c',t2') = eval2' e $ subst e (c,t2)   -- E-App2
+eval2' e (c,               App2 t1 t2)                 = (c', App2  t1' t2)  where (c',t1') = eval2' e $ subst e (c,t1)   -- E-App1
 eval2' e t@_ = t
 
 -- | Call-by-value operational semantics ("Operational Symantics", page 55) for 
