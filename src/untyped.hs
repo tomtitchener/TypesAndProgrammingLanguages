@@ -544,9 +544,9 @@ termCommand2Term1s :: Command -> [Term1]
 termCommand2Term1s (TermCommand t1) = [t1]
 termCommand2Term1s _                = []
 
-binderCommand2Env :: Command -> Env
-binderCommand2Env (BinderCommand s t) = [(s, removeNames [] t)]
-binderCommand2Env _                   = []
+envAndBinderCommand2Env :: Env -> Command -> Env
+envAndBinderCommand2Env env (BinderCommand s t) = env ++ [(s, removeNames (map fst env) t)]
+envAndBinderCommand2Env env _ = env
 
 -- | Given 'Env' with global environment of assoc list of 'Sym' to 'Term2' and 'Term1',
 --   use 'Sym' from 'Env' for free vars to remove names from 'Term1', creating tuple '(Γ,Term2)',
@@ -563,7 +563,7 @@ evalTerm1 env t1 = show . PP.pretty $ restoreNames syms $ eval2 env (removeNames
 evalCommands :: [Command] -> [String]
 evalCommands cmds = map (evalTerm1 env) t1s
   where
-    env  = concatMap binderCommand2Env cmds
+    env  = foldl envAndBinderCommand2Env [] cmds
     t1s  = concatMap termCommand2Term1s cmds
 
 -- | Parser for file with list of lines, converted to [Command], which then gets
