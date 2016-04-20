@@ -32,7 +32,8 @@ import           Debug.Trace
 
 import           Control.Monad                 (liftM, mapM_, void)
 import           Data.Either                   (either)
-import           Data.List                     (elemIndices, sort, head, group, intersect, lookup, (\\))
+import           Data.List                     (elemIndices, sort, head, group, intersect, lookup, (\\), find)
+import           Data.Maybe                    (maybe)
 import           Data.Tree                     (Tree(..))
 import           System.Environment            (getArgs)
 import           Text.ParserCombinators.Parsec (Parser(..), (<|>), (<?>), many, many1, endBy, sepBy, lower, char, eof, parse, spaces, newline, noneOf, letter, try, parseFromFile, choice)
@@ -548,14 +549,29 @@ envAndBinderCommand2Env :: Env -> Command -> Env
 envAndBinderCommand2Env env (BinderCommand s t) = env ++ [(s, removeNames (map fst env) t)]
 envAndBinderCommand2Env env _ = env
 
+type Env1 = [(Sym, Term1)]
+
+env2env1 :: Env -> Env1
+env2env1 = map (\(s,(c,t2)) -> (s,restoreNames [] (c,t2)))
+
+env12t1 :: Env1 -> Term1 -> Sym
+env12t1 e t = maybe "" fst $ find (\(s,t') -> t == t') e
+
+-- | Traverse Term1 performing reverse lookup on Env with each (Sym, (Γ,Term2)) replaced by (Sym, Term1)
+unsubst :: Env1 -> Term1 -> Term1
+unsubst e t@(Var _)     = if s /= "" then (Var s) else t where s = env12t1 e t
+unsubst e t@(Abs s t1)  = if s /= "" then (Var s) else Abs s (unsubst e t1) where s = env12t1 e t
+unsubst e t@(App t1 t2) = if s /= "" then (Var s) else App (unsubst e t1) (unsubst e t2) where s = env12t1 e t
+
 -- | Given 'Env' with global environment of assoc list of 'Sym' to 'Term2' and 'Term1',
 --   use 'Sym' from 'Env' for free vars to remove names from 'Term1', creating tuple '(Γ,Term2)',
 --   then restore names using free vars and updated '(Γ,Term2)' from 'eval2' and pretty-print
 --   the result.
 evalTerm1 ::  Env -> Term1 -> String
-evalTerm1 env t1 = show . PP.pretty $ restoreNames syms $ eval2 env (removeNames syms t1)
+evalTerm1 env t1 = show . PP.pretty $ unsubst env1 $ restoreNames syms $ eval2 env (removeNames syms t1)
   where
     syms = map fst env
+    env1 = env2env1 env
 
 -- | Separate binders from terms in '[Command]' and then evaluate all terms using
 --   free vars with terms in binders and answer the list of resulting terms.
