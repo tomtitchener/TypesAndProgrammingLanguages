@@ -6,12 +6,7 @@
 
  TBD:
 
-   * readability
-     - resolve terms back to symbols after eval so e.g. (id id) turns into id.
    * doctest over untyped lambda calc examples in text
-     - church booleans
-     - pairs
-     - church numerals
      - operations over church numerals
      - lists
      - real bool and nat
@@ -29,7 +24,6 @@ NB quote, page 88:  "Just because you've implemented something doesn't mean you 
 module Untyped where
 
 import           Debug.Trace
-
 import           Control.Monad                 (liftM, mapM_, void)
 import           Data.Either                   (either)
 import           Data.List                     (elemIndices, sort, head, group, intersect, lookup, (\\), find)
@@ -426,15 +420,9 @@ subst :: Env -> (Γ,Term2) -> (Γ,Term2)
 subst es p@(_, v@(Var2 i)) = if i < length es then snd (es !! i) else p 
 subst _  p                 = p
 
-eval2' :: Env -> (Γ,Term2) -> (Γ,Term2)
-eval2' e (Node "" [c1, c2], App2 t@(Abs2 _) s@(Abs2 _)) = βRed2  (c2,s) (c1,t)                                                             -- E-AppAbs
-eval2' e (Node "" [c1, c2], App2 v1@(Abs2 _) t2)        = (Node "" [c1, c2'], App2  v1  t2') where (c2',t2') = eval2' e $ subst e (c2,t2)  -- E-App2
-eval2' e (Node "" [c1, c2], App2 t1 t2)                 = (Node "" [c1', c2], App2  t1' t2)  where (c1',t1') = eval2' e $ subst e (c1,t1)  -- E-App1
-eval2' e t@_ = t
-
 -- | Call-by-value operational semantics ("Operational Symantics", page 55) for 
---   evaluation of nameless term following Figure 5.3 "Untyped lambda calculus (λ)".
---   Stops at point of recurring to self.
+--   evaluation of nameless term following Figure 5.3 "Untyped lambda calculus (λ)",
+--   details in callByValEval'.  Outer wrapper stops at point of recurring to self (fix).
 --
 --   Carry contexts for 1) free variables 'Env' and 2) names for terms in 'Term2' (Γ)
 --   through evaluation of input 'Term2' to resolve terminal 'Var2' to 'Term2' for free
@@ -444,16 +432,44 @@ eval2' e t@_ = t
 --   search t2 in p'@(_, t2) for matches against RHS of env, replacing
 --   matches with symbol from env.
 --
---   TBD: count terms to avoid co-recursion/unfold?
---
 --   Call-by-value example, page 55:
 --
 -- >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (evalCommands cmds)) (parse parseCommands "lambda" "id = λx.x;\n(id (id (λz. id z)));\n")
 -- λz.(id z)
 --
+-- Note:  call by value leaves eval of Church numerals hanging:
 --
-eval2 :: Env -> (Γ,Term2) -> (Γ,Term2)
-eval2 env p@(_, t1) = if t1 == t2 then p' else eval2 env p' where p'@(_, t2) = eval2' env p
+-- >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (evalCommands cmds)) (parse parseCommands "lambda" "zero = (λs.λz.z);\nscc = (λn.λs.λz.s (n s z));\n(scc zero);\n")
+-- λs.λz.(s ((zero s) z))
+--
+callByVal :: Env -> (Γ,Term2) -> (Γ,Term2)
+callByVal e (Node "" [c1, c2], App2 t@(Abs2 _) s@(Abs2 _)) = βRed2  (c2,s) (c1,t)                                                                -- E-AppAbs
+callByVal e (Node "" [c1, c2], App2 v1@(Abs2 _) t2)        = (Node "" [c1, c2'], App2  v1  t2') where (c2',t2') = callByVal e $ subst e (c2,t2)  -- E-App2
+callByVal e (Node "" [c1, c2], App2 t1 t2)                 = (Node "" [c1', c2], App2  t1' t2)  where (c1',t1') = callByVal e $ subst e (c1,t1)  -- E-App1
+callByVal e t@_ = t
+
+-- | Eval wrapper stops at point of recurring to self (fix).
+--
+eval :: (Env -> (Γ,Term2) -> (Γ,Term2)) -> Env -> (Γ,Term2) -> (Γ,Term2)
+eval f env p@(_, t1) = let p'@(_, t2) = f env p in if t1 == t2 then p' else f env p' 
+
+-- | Eval with callByVal strategy
+--
+callByValEval :: Env -> (Γ,Term2) -> (Γ,Term2)
+callByValEval = eval callByVal
+
+{-- Obscure, is there a better syntax for this?  Only advantage is recursion to self without passing env.
+
+--   TBD: count terms to avoid co-recursion/unfold?
+
+import           Data.Function                 (fix)
+
+eval' :: (Env -> (Γ,Term2) -> (Γ,Term2)) -> Env -> (Γ,Term2) -> (Γ,Term2)
+eval' f env = fix (\v p@(_,t) -> let p'@(_, t') = f env p in if t == t' then p' else v p')
+
+--}
+
+-- 5.3.6 Exercise [***] Adapt these rules to describe the three other strategies for evaluation--full beta-reduction, normal order, lazy evaluation.
 
 -----------
 -- Parse --
@@ -559,16 +575,16 @@ env12t1 e t = maybe "" fst $ find (\(s,t') -> t == t') e
 
 -- | Traverse Term1 performing reverse lookup on Env with each (Sym, (Γ,Term2)) replaced by (Sym, Term1)
 unsubst :: Env1 -> Term1 -> Term1
-unsubst e t@(Var _)     = if s /= "" then (Var s) else t where s = env12t1 e t
-unsubst e t@(Abs s t1)  = if s /= "" then (Var s) else Abs s (unsubst e t1) where s = env12t1 e t
-unsubst e t@(App t1 t2) = if s /= "" then (Var s) else App (unsubst e t1) (unsubst e t2) where s = env12t1 e t
+unsubst e t@(Var _)     = if s  /= "" then (Var s)  else t where s = env12t1 e t
+unsubst e t@(Abs s t1)  = if s' /= "" then (Var s') else Abs s (unsubst e t1) where s' = env12t1 e t
+unsubst e t@(App t1 t2) = if s  /= "" then (Var s)  else App (unsubst e t1) (unsubst e t2) where s = env12t1 e t
 
 -- | Given 'Env' with global environment of assoc list of 'Sym' to 'Term2' and 'Term1',
 --   use 'Sym' from 'Env' for free vars to remove names from 'Term1', creating tuple '(Γ,Term2)',
---   then restore names using free vars and updated '(Γ,Term2)' from 'eval2' and pretty-print
+--   then restore names using free vars and updated '(Γ,Term2)' from 'callByValEval' and pretty-print
 --   the result.
 evalTerm1 ::  Env -> Term1 -> String
-evalTerm1 env t1 = show . PP.pretty $ unsubst env1 $ restoreNames syms $ eval2 env (removeNames syms t1)
+evalTerm1 env t1 = show . PP.pretty $ unsubst env1 $ restoreNames syms $ callByValEval env (removeNames syms t1)
   where
     syms = map fst env
     env1 = env2env1 env
@@ -592,7 +608,7 @@ evalCommands cmds = map (evalTerm1 env) t1s
 --   @
 --    
 -- >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (evalCommands cmds)) (parse parseCommands "lambda" "id = λx.x;\n(id id);\n")
--- λx.x
+-- id
 --
 readFile' :: String -> IO ()
 readFile' fName = do
