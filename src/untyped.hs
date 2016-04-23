@@ -17,15 +17,15 @@
      - map Term1 and Term2 and eval and reduce to Data.Functor.Foldable
        (https://hackage.haskell.org/package/recursion-schemes) following http://dev.stephendiehl.com/hask/#recursion-schemes
 
-NB quote, page 88:  "Just because you've implemented something doesn't mean you understand it" (Brian Cantwell Smith).
+page 88:  "Just because you've implemented something doesn't mean you understand it" (Brian Cantwell Smith).
 
 --}
 
 module Untyped where
 
-import           Debug.Trace
 import           Control.Monad                 (liftM, mapM_, void)
 import           Data.Either                   (either)
+import           Data.Function                 (fix)
 import           Data.List                     (elemIndices, sort, head, group, intersect, lookup, (\\), find)
 import           Data.Maybe                    (maybe)
 import           Data.Tree                     (Tree(..))
@@ -450,24 +450,15 @@ callByVal e t@_ = t
 
 -- | Eval wrapper stops at point of recurring to self (fix).
 --
+--   TBD: count terms to avoid co-recursion/unfold?
+--
 eval :: (Env -> (Γ,Term2) -> (Γ,Term2)) -> Env -> (Γ,Term2) -> (Γ,Term2)
-eval f env p@(_, t1) = let p'@(_, t2) = f env p in if t1 == t2 then p' else f env p' 
+eval f env = fix (\v p@(_,t) -> let p'@(_, t') = f env p in if t == t' then p' else v p')
 
 -- | Eval with callByVal strategy
 --
 callByValEval :: Env -> (Γ,Term2) -> (Γ,Term2)
 callByValEval = eval callByVal
-
-{-- Obscure, is there a better syntax for this?  Only advantage is recursion to self without passing env.
-
---   TBD: count terms to avoid co-recursion/unfold?
-
-import           Data.Function                 (fix)
-
-eval' :: (Env -> (Γ,Term2) -> (Γ,Term2)) -> Env -> (Γ,Term2) -> (Γ,Term2)
-eval' f env = fix (\v p@(_,t) -> let p'@(_, t') = f env p in if t == t' then p' else v p')
-
---}
 
 -- 5.3.6 Exercise [***] Adapt these rules to describe the three other strategies for evaluation--full beta-reduction, normal order, lazy evaluation.
 
