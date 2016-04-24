@@ -208,40 +208,6 @@ instance PP.Pretty Term2 where
 --
 type Γ = Tree Sym
 
--- | Add first context to beginning of second context.  Context itself is a
---   tree, so splicing means traversing first tree to all leaf nodes and swapping
---   second tree for empty node at the end.
---
--- >>> consCtxts (Node "z" [Node "" []]) (Node "" [Node "a" [Node "" []], Node "b" [Node "" []]])
--- Node {rootLabel = "z", subForest = [Node {rootLabel = "", subForest = [Node {rootLabel = "a", subForest = [Node {rootLabel = "", subForest = []}]},Node {rootLabel = "b", subForest = [Node {rootLabel = "", subForest = []}]}]}]}
---
--- >>> consCtxts (Node "" [Node "a" [Node "" []], Node "b" [Node "" []]]) (Node "z" [Node "" []]) 
--- Node {rootLabel = "", subForest = [Node {rootLabel = "a", subForest = [Node {rootLabel = "z", subForest = [Node {rootLabel = "", subForest = []}]}]},Node {rootLabel = "b", subForest = [Node {rootLabel = "z", subForest = [Node {rootLabel = "", subForest = []}]}]}]}
---
--- >>> consCtxts (Node {rootLabel = "l", subForest = [Node {rootLabel = "m", subForest = [Node {rootLabel = "n", subForest = [Node {rootLabel = "", subForest = []}]}]}]}) (Node {rootLabel = "a", subForest = [Node {rootLabel = "b", subForest = [Node {rootLabel = "c", subForest = [Node {rootLabel = "", subForest = []}]}]}]})
--- Node {rootLabel = "l", subForest = [Node {rootLabel = "m", subForest = [Node {rootLabel = "n", subForest = [Node {rootLabel = "a", subForest = [Node {rootLabel = "b", subForest = [Node {rootLabel = "c", subForest = [Node {rootLabel = "", subForest = []}]}]}]}]}]}]}
---
-consCtxts :: Γ -> Γ -> Γ
-consCtxts a b = walk a
-  where
-    walk (Node "" [])      = b
-    walk (Node x  [])      = Node x [b]
-    walk (Node x  [c])     = Node x [walk c]
-    walk (Node "" [c1,c2]) = Node "" [walk c1, walk c2]
-    walk ctx = error $ "consCtxts walk unexpected arg " ++ show ctx
-
-tailCtxt :: Γ -> Γ
-tailCtxt (Node _ [c]) = c
-tailCtxt ctx = error $ "tailCtxt unexpected arg " ++ show ctx
-
-{--
-validCtxtTerm :: Int -> Int -> (Γ,Term2) -> (Γ,Term2)
-validCtxtTerm l i p@(Node "" [],          Var2 _)   = p
-validCtxtTerm l i p@(Node _ [_],          Abs2 _)   = p
-validCtxtTerm l i p@(Node "" [_, _],      App2 _ _) = p
-validCtxtTerm l i (n, t) = error $ "validCtxtTerm l " ++ show l ++ " i " ++ show i ++ " invalid ctxt " ++ show n ++ " for term " ++ show t
---}
-
 -- | Safeguarded replacement of Term1 with pair <naming context, Term2> 
 --   where test of free vars guarantees @elemIndices s path@ does not
 --   answer empty list.
@@ -377,88 +343,95 @@ termShift d = walk 0
 --  Abs2 (Var2 0)
 --
 termSubst :: Int -> (Γ,Term2) -> (Γ,Term2) -> (Γ,Term2)
-termSubst 0 (c1, s@(Abs2 _)) t = walk 0 t
+termSubst 0 (c1, s) t = walk 0 t
   where
     walk :: Int -> (Γ,Term2) -> (Γ,Term2)
     walk c p@(_,                  Var2 i)     = if i == 0 + c then (c1, termShift c s) else p
     walk c (Node x [ctx],         Abs2 t1)    = (Node x [ctx'], Abs2 t2) where (ctx', t2) = walk (c+1) (ctx, t1)
     walk c (Node "" [ctx1, ctx2], App2 t1 t2) = (Node "" [ctx1', ctx2'], App2 t1' t2') where (ctx1', t1') = walk c (ctx1, t1); (ctx2', t2') = walk c (ctx2, t2)
     walk c t = error $ "termSubst walk unexpected arg vals c " ++ show c ++ " t " ++ show t 
-termSubst 0 (_, s) t = error $ "termSubst called with top level terms other than Abs2, s " ++ show s 
 termSubst n (_, s) t = error $ "termSubst called with non-zero index " ++ show n ++ " for terms s " ++ show s ++ " and t " ++ show t
 
 -- | Substitute 'Term2 s' in first argument in inner term of 'Term2 t'
 --   in second argument.  Implements application of t1 and s--(t1 s)--where
---   both t1 and s are abstractions and t is the term within abstraction t1.
---   s is value to substitute for top-level index 0 in t1.
+--   t1 is an abstractions and t is the term within abstraction t1 and s
+--   is the value to substitute for top-level index 0 in t1.
 -- 
 --   Shifts s up by one to account for expansion by 1 of binding in
 --   top-level term t1, then shift result back down by 1 to compensate.
 --
+--   Generic code handles reductions for call by value, where s is only ever Abs (val)
+--   as well as other strategies, where s may be any Term.
+-- 
 βRed2 :: (Γ,Term2) -> (Γ,Term2) -> (Γ,Term2)
-βRed2 (c1, s@(Abs2 _)) (Node _ [c2], Abs2 t) = (c3, termShift (-1) t2) where (c3, t2) = termSubst 0 (c1, termShift 1 s) (c2, t)
+βRed2 (c1, s) (Node _ [c2], Abs2 t) = (c3, termShift (-1) t2) where (c3, t2) = termSubst 0 (c1, termShift 1 s) (c2, t)
 βRed2 s t = error $ "βRed2 unexpected types for term s " ++ show  s ++ " or t " ++ show t
-
--- | Environment is an assoc list of symbols with context and 'Term2' tuples.
--- 
---   Initialized in file with syntax e.g. @id = λx.x;@ below:
---
---   @
---   id = λx.x;
---   (id id);
---   @
--- 
-type Env = [(Sym, (Γ,Term2))]
-
--- | At leaf of 'Term2', check for match of name for 'Var2' in
---   list of free vars in 'Env'.  If there's a match, substitute
---   'Term2' from 'Env' for 'Var2' and splice context for 'Term2'
---   from 'Env'.  Relies on 'TermShift' to increase de Bruijn 
---   indexes for bound vars and not free vars.
--- 
-subst :: Env -> (Γ,Term2) -> (Γ,Term2)
-subst es p@(_, v@(Var2 i)) = if i < length es then snd (es !! i) else p 
-subst _  p                 = p
 
 -- | Call-by-value operational semantics ("Operational Symantics", page 55) for 
 --   evaluation of nameless term following Figure 5.3 "Untyped lambda calculus (λ)",
---   details in callByValEval'.  Outer wrapper stops at point of recurring to self (fix).
---
---   Carry contexts for 1) free variables 'Env' and 2) names for terms in 'Term2' (Γ)
---   through evaluation of input 'Term2' to resolve terminal 'Var2' to 'Term2' for free
---   vars and to update context for names during 'βRed2'.
--- 
---   TBD: "un"substitute back to Env symbols from concluding reduction,
---   search t2 in p'@(_, t2) for matches against RHS of env, replacing
---   matches with symbol from env.
+--   details in callByVal.  Outer wrapper stops at point of recurring to self (fix).
 --
 --   Call-by-value example, page 55:
 --
--- >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (evalCommands cmds)) (parse parseCommands "lambda" "id = λx.x;\n(id (id (λz. id z)));\n")
+-- >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (evalCommands callByVal cmds)) (parse parseCommands "lambda" "id = λx.x;\n(id (id (λz. id z)));\n")
 -- λz.(id z)
 --
 -- Note:  call by value leaves eval of Church numerals hanging:
 --
--- >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (evalCommands cmds)) (parse parseCommands "lambda" "zero = (λs.λz.z);\nscc = (λn.λs.λz.s (n s z));\n(scc zero);\n")
+-- >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (evalCommands callByVal cmds)) (parse parseCommands "lambda" "zero = (λs.λz.z);\nscc = (λn.λs.λz.s (n s z));\n(scc zero);\n")
 -- λs.λz.(s ((zero s) z))
 --
-callByVal :: Env -> (Γ,Term2) -> (Γ,Term2)
-callByVal e (Node "" [c1, c2], App2 t@(Abs2 _) s@(Abs2 _)) = βRed2  (c2,s) (c1,t)                                                                -- E-AppAbs
-callByVal e (Node "" [c1, c2], App2 v1@(Abs2 _) t2)        = (Node "" [c1, c2'], App2  v1  t2') where (c2',t2') = callByVal e $ subst e (c2,t2)  -- E-App2
-callByVal e (Node "" [c1, c2], App2 t1 t2)                 = (Node "" [c1', c2], App2  t1' t2)  where (c1',t1') = callByVal e $ subst e (c1,t1)  -- E-App1
-callByVal e t@_ = t
+callByVal :: (Γ,Term2) -> (Γ,Term2)
+callByVal (Node "" [c1, c2], App2 t@(Abs2 _) s@(Abs2 _)) = βRed2  (c2,s) (c1,t)                                                    -- E-AppAbs
+callByVal (Node "" [c1, c2], App2 v1@(Abs2 _) t2)        = (Node "" [c1, c2'], App2  v1  t2') where (c2',t2') = callByVal (c2,t2)  -- E-App2
+callByVal (Node "" [c1, c2], App2 t1 t2)                 = (Node "" [c1', c2], App2  t1' t2)  where (c1',t1') = callByVal (c1,t1)  -- E-App1
+callByVal p = p
+
+-- | Full beta reduction
+--
+--  This doesn't work.  Is there something different about "non-deterministic" beta reduction from the example in the text?
+--  The reduction shows λz.(id z), not λz.z.
+--
+--  >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (evalCommands fullBeta cmds)) (parse parseCommands "lambda" "id = (λx.x);\n(id (id (λz. id z)));\n")
+--  λz.z
+--
+fullBeta :: (Γ,Term2) -> (Γ,Term2)
+fullBeta (Node "" [c1, c2], App2 t@(Abs2 _) s) = βRed2  (c2,s) (c1,t)                                                   -- E-AppAbs
+fullBeta (Node "" [c1, c2], App2 v1 t2)        = (Node "" [c1, c2'], App2  v1  t2') where (c2',t2') = fullBeta (c2,t2)  -- E-App2
+fullBeta (Node "" [c1, c2], App2 t1 t2)        = (Node "" [c1', c2], App2  t1' t2)  where (c1',t1') = fullBeta (c1,t1)  -- E-App1
+fullBeta p = p
+
+{--
+-- | NormalOrder eval, page 56.  "Under the normal order strategy, the leftmost
+--   outermost redex is always reduced first."  Also, there's allowance for
+--   reduction inside abstractions and there isn't the constraint as there
+--   is for call by value where " ... the redex is reduced only when its
+--   right-hand side has laready been reduced to a value ...".
+--
+--  >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (evalCommands normalOrder cmds)) (parse parseCommands "lambda" "id = (λx.x);\n(id (id (λz. id z)));\n")
+--  λz.z
+--
+-- Wrong!  See answer in text on page 502.
+--
+normalOrder :: (Γ,Term2) -> (Γ,Term2)
+normalOrder (Node "" [c1, c2], App2 t@(Abs2 _) s) = βRed2  (c2,s) (c1,t)                                                      -- E-AppAbs
+normalOrder (Node "" [c1, c2], App2 t1 t2)        = (Node "" [c1', c2], App2  t1' t2)  where (c1',t1') = normalOrder (c1,t1)  -- E-App1
+normalOrder p = p
+--}
+
+-- | Lazy eval
+--  
+lazy :: (Γ,Term2) -> (Γ,Term2)
+lazy (Node "" [c1, c2], App2 t@(Abs2 _) s) = βRed2  (c2,s) (c1,t)                                               -- E-AppAbs
+lazy (Node "" [c1, c2], App2 t1 t2)        = (Node "" [c1', c2], App2  t1' t2)  where (c1',t1') = lazy (c1,t1)  -- E-App1
+lazy p = p
 
 -- | Eval wrapper stops at point of recurring to self (fix).
 --
 --   TBD: count terms to avoid co-recursion/unfold?
 --
-eval :: (Env -> (Γ,Term2) -> (Γ,Term2)) -> Env -> (Γ,Term2) -> (Γ,Term2)
-eval f env = fix (\v p@(_,t) -> let p'@(_, t') = f env p in if t == t' then p' else v p')
-
--- | Eval with callByVal strategy
---
-callByValEval :: Env -> (Γ,Term2) -> (Γ,Term2)
-callByValEval = eval callByVal
+eval :: ((Γ,Term2) -> (Γ,Term2)) -> (Γ,Term2) -> (Γ,Term2)
+eval strat = fix (\v p@(_,t) -> let p'@(_, t') = strat p in if t == t' then p' else v p')
 
 -- 5.3.6 Exercise [***] Adapt these rules to describe the three other strategies for evaluation--full beta-reduction, normal order, lazy evaluation.
 
@@ -548,46 +521,63 @@ parseCommand = parseBinderCommand <|> parseTermCommand <?> "command"
 parseCommands :: Parser [Command]
 parseCommands = parseCommand `endBy` choice [eof, void newline, char ';' >> void newline]
 
+-- | Symbol lookup for assignment of sym to term, e.g. @id = (λx.x);@.
+--
+type Env = [(Sym, Term1)]
+
+-- | Traverse Term1 performing substituting syms for free Vars
+--
+subst :: Env -> Term1 -> Term1
+subst e t = subst' t 
+  where
+    frees :: [Sym]
+    frees = freeVars t
+    subst' :: Term1 -> Term1
+    subst' t'@(Var s)     = maybe t' id $ if elem s frees then lookup s e else Nothing
+    subst'    (Abs s t1)  = Abs s (subst' t1)
+    subst'    (App t1 t2) = App (subst' t1) (subst' t2)
+    
+-- | Reverse lookup by Term1 in Env, which is assoc list [(Env, Term1)]
+--
+-- TBD:  could this be a lookup on a reverse of the assoc list?
+--
+pukool :: Env -> Term1 -> Maybe Sym
+pukool e t = fmap fst $ find (\(s,t') -> t == t') e
+
+-- | Traverse Term1 performing reverse lookup on Env with each (Sym, Term1),
+--   replacing Term1 with (Var s) on match.
+--
+unsubst :: Env -> Term1 -> Term1
+unsubst _ t@(Var _)     = t
+unsubst e t@(Abs s t1)  = maybe t' Var (pukool e t) where t' = Abs s (unsubst e t1)
+unsubst e t@(App t1 t2) = maybe t' Var (pukool e t) where t' = App (unsubst e t1) (unsubst e t2)
+
+-- | Capture TermCommand as list for splitting apart TermCommand adn BinderCommand.
 termCommand2Term1s :: Command -> [Term1]
 termCommand2Term1s (TermCommand t1) = [t1]
 termCommand2Term1s _                = []
 
+-- | Append contents for BinderCommand to list, skip TermCommand.
+--
 envAndBinderCommand2Env :: Env -> Command -> Env
-envAndBinderCommand2Env env (BinderCommand s t) = env ++ [(s, removeNames (map fst env) t)]
+envAndBinderCommand2Env env (BinderCommand s t) = env ++ [(s,subst env t)]
 envAndBinderCommand2Env env _ = env
 
-type Env1 = [(Sym, Term1)]
-
-env2env1 :: Env -> Env1
-env2env1 = map (\(s,(c,t2)) -> (s,restoreNames [] (c,t2)))
-
-env12t1 :: Env1 -> Term1 -> Sym
-env12t1 e t = maybe "" fst $ find (\(s,t') -> t == t') e
-
--- | Traverse Term1 performing reverse lookup on Env with each (Sym, (Γ,Term2)) replaced by (Sym, Term1)
-unsubst :: Env1 -> Term1 -> Term1
-unsubst e t@(Var _)     = if s  /= "" then (Var s)  else t where s = env12t1 e t
-unsubst e t@(Abs s t1)  = if s' /= "" then (Var s') else Abs s (unsubst e t1) where s' = env12t1 e t
-unsubst e t@(App t1 t2) = if s  /= "" then (Var s)  else App (unsubst e t1) (unsubst e t2) where s = env12t1 e t
-
--- | Given 'Env' with global environment of assoc list of 'Sym' to 'Term2' and 'Term1',
---   use 'Sym' from 'Env' for free vars to remove names from 'Term1', creating tuple '(Γ,Term2)',
---   then restore names using free vars and updated '(Γ,Term2)' from 'callByValEval' and pretty-print
---   the result.
-evalTerm1 ::  Env -> Term1 -> String
-evalTerm1 env t1 = show . PP.pretty $ unsubst env1 $ restoreNames syms $ callByValEval env (removeNames syms t1)
-  where
-    syms = map fst env
-    env1 = env2env1 env
+-- | Given function that implements evaluation strategy in first argument, then 'Env' with global environment of
+--   assoc list of 'Sym' to 'Term2' and 'Term1', use 'Sym' from 'Env' for free vars to remove names from 'Term1',
+--   creating tuple '(Γ,Term2)', then evaluate the result and restore names using free vars and eval result.
+evalTerm1 ::  ((Γ,Term2) -> (Γ,Term2)) -> Env -> Term1 -> Term1
+evalTerm1 strat env =
+  unsubst env . restoreNames [] . eval strat . removeNames [] . subst env
 
 -- | Separate binders from terms in '[Command]' and then evaluate all terms using
 --   free vars with terms in binders and answer the list of resulting terms.
 --    
-evalCommands :: [Command] -> [String]
-evalCommands cmds = map (evalTerm1 env) t1s
+evalCommands :: ((Γ,Term2) -> (Γ,Term2)) -> [Command] -> [String]
+evalCommands strat cmds = map (show . PP.pretty . evalTerm1 strat env) terms
   where
     env  = foldl envAndBinderCommand2Env [] cmds
-    t1s  = concatMap termCommand2Term1s cmds
+    terms = concatMap termCommand2Term1s cmds
 
 -- | Parser for file with list of lines, converted to [Command], which then gets
 --   split into environment with assoc list of sym with term and a list of terms
@@ -597,14 +587,21 @@ evalCommands cmds = map (evalTerm1 env) t1s
 --   id = λx.x;
 --   (id id);
 --   @
---    
--- >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (evalCommands cmds)) (parse parseCommands "lambda" "id = λx.x;\n(id id);\n")
+--
+--   See "test.l" for examples.  Use this function in ghci to run file by hand:  @λ: readFile' "test.l"@.
+--
+-- >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (evalCommands callByVal cmds)) (parse parseCommands "lambda" "id = λx.x;\n(id id);\n")
 -- id
 --
-readFile' :: String -> IO ()
-readFile' fName = do
-  cmds  <- parseFromFile parseCommands fName
-  either print (mapM_ putStrLn . evalCommands) cmds
-  
+-- >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (evalCommands normalOrder cmds)) (parse parseCommands "lambda" "id = λx.x;\n(id id);\n")
+-- id
+--
+readFile' :: ((Γ,Term2) -> (Γ,Term2)) -> String -> IO ()
+readFile' strat fName = parseFromFile parseCommands fName >>= either print (mapM_ putStrLn . evalCommands strat)
+
+-- | Expects file name as single command-line argument.
+-- 
 readFile :: IO ()
-readFile = getArgs >>= \[fName,_] -> readFile' fName
+readFile = getArgs >>= readFile' callByVal . head
+
+
