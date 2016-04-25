@@ -389,16 +389,55 @@ callByVal p = p
 
 -- | Full beta reduction
 --
+--  Rules cribbed from solution:
+-- 
+--     t1 -> t1'
+--  ---------------               E-App1
+--  t1 t2 -> t1' t2
+--
+--     t2 -> t2'
+--  ---------------               E-App2
+--  t1 t2 -> t1 t2'
+--
+--  (λx.t12) t2 -> [x ⟼ t2]t12   E-AppAbs
+--
+--  Note the syntactic category of values is not used.
+--
 --  This doesn't work.  Is there something different about "non-deterministic" beta reduction from the example in the text?
---  The reduction shows λz.(id z), not λz.z.
+--  The eval gives λz.(id z), not λz.z.
 --
 --  >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (evalCommands fullBeta cmds)) (parse parseCommands "lambda" "id = (λx.x);\n(id (id (λz. id z)));\n")
 --  λz.z
 --
+-- Maybe traversal by pattern match of type fails due to overlap, for which ghc does give you a warning.
+-- The logic behind the evaluation relation in Figure 5-3 for the two rules E-App1 and E-App2 eludes me.
+-- The premise require one of the terms be able to take a step, which means the term must be in the shape
+-- that matches E-AppAbs.  Yet the logic for call by value just follows the types in the operational
+-- semantics.  
+--
+--     t1 -> t1'
+--  ---------------               E-App1
+--  t1 t2 -> t1' t2
+--
+--     t2 -> t2'
+--  ---------------               E-App2
+--   v1 t2 -> v1 t2'
+--
+--  (λx.t12) v2 -> [x ⟼ v2]t12   E-AppAbs
+--
+-- Because the types for (λx.t12) v2, v1 t2, and t1 t2 are unique, they map to traversal by pattern
+-- match cleanly.  The thing that's confusing about the premise is that it isn't tested except by
+-- failure of eval for e.g. t1 -> t1' or t2 -> t2'.  The implementation just blindly goes ahead
+-- and tries to eval t1 assuming the eval will result in an E-AppAbs.  And if it doesn't then the
+-- OCaml eval throws and mine answers the same term as before and so eval comes to a stop.
+--
 fullBeta :: (Γ,Term2) -> (Γ,Term2)
-fullBeta (Node "" [c1, c2], App2 t@(Abs2 _) s) = βRed2  (c2,s) (c1,t)                                                   -- E-AppAbs
-fullBeta (Node "" [c1, c2], App2 v1 t2)        = (Node "" [c1, c2'], App2  v1  t2') where (c2',t2') = fullBeta (c2,t2)  -- E-App2
-fullBeta (Node "" [c1, c2], App2 t1 t2)        = (Node "" [c1', c2], App2  t1' t2)  where (c1',t1') = fullBeta (c1,t1)  -- E-App1
+fullBeta (Node "" [c1, c2], App2 t12@(Abs2 _) t2) = βRed2 (c2,t2) (c1,t12)                               -- E-AppAbs
+fullBeta (Node "" [c1, c2], App2 t1 t2)           = if t2' /= t2 then (Node "" [c1, c2'], App2  t1  t2') -- E-App2
+                                                                 else (Node "" [c1', c2], App2  t1' t2)  -- E-App1
+                                                      where
+                                                        (c2',t2') = fullBeta (c2,t2)
+                                                        (c1',t1') = fullBeta (c1,t1)
 fullBeta p = p
 
 {--
@@ -593,8 +632,10 @@ evalCommands strat cmds = map (show . PP.pretty . evalTerm1 strat env) terms
 -- >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (evalCommands callByVal cmds)) (parse parseCommands "lambda" "id = λx.x;\n(id id);\n")
 -- id
 --
+{--    
 -- >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (evalCommands normalOrder cmds)) (parse parseCommands "lambda" "id = λx.x;\n(id id);\n")
 -- id
+--}    
 --
 readFile' :: ((Γ,Term2) -> (Γ,Term2)) -> String -> IO ()
 readFile' strat fName = parseFromFile parseCommands fName >>= either print (mapM_ putStrLn . evalCommands strat)
