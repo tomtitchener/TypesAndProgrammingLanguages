@@ -387,9 +387,9 @@ callByVal (Node "" [c1, c2], App2 v1@(Abs2 _) t2)        = (Node "" [c1, c2'], A
 callByVal (Node "" [c1, c2], App2 t1 t2)                 = (Node "" [c1', c2], App2  t1' t2)  where (c1',t1') = callByVal (c1,t1)  -- E-App1
 callByVal p = p
 
--- | Full beta reduction
+-- | Full beta reduction following instructions from answer in text.
 --
---  Rules cribbed from solution:
+--  Rules copied from solution:
 -- 
 --     t1 -> t1'
 --  ---------------               E-App1
@@ -403,7 +403,7 @@ callByVal p = p
 --
 --  Note the syntactic category of values is not used.
 --
---  This doesn't work.  Is there something different about "non-deterministic" beta reduction from the example in the text?
+--  But this doesn't work.  Is there something different about "non-deterministic" beta reduction from the example in the text?
 --  The eval gives λz.(id z), not λz.z.
 --
 --  >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (evalCommands fullBeta cmds)) (parse parseCommands "lambda" "id = (λx.x);\n(id (id (λz. id z)));\n")
@@ -415,15 +415,15 @@ callByVal p = p
 -- that matches E-AppAbs.  Yet the logic for call by value just follows the types in the operational
 -- semantics.  
 --
---     t1 -> t1'
---  ---------------               E-App1
---  t1 t2 -> t1' t2
+--       t1 -> t1'
+--    ---------------               E-App1
+--    t1 t2 -> t1' t2
 --
---     t2 -> t2'
---  ---------------               E-App2
---   v1 t2 -> v1 t2'
+--       t2 -> t2'
+--    ---------------               E-App2
+--     v1 t2 -> v1 t2'
 --
---  (λx.t12) v2 -> [x ⟼ v2]t12   E-AppAbs
+--    (λx.t12) v2 -> [x ⟼ v2]t12   E-AppAbs
 --
 -- Because the types for (λx.t12) v2, v1 t2, and t1 t2 are unique, they map to traversal by pattern
 -- match cleanly.  The thing that's confusing about the premise is that it isn't tested except by
@@ -431,40 +431,62 @@ callByVal p = p
 -- and tries to eval t1 assuming the eval will result in an E-AppAbs.  And if it doesn't then the
 -- OCaml eval throws and mine answers the same term as before and so eval comes to a stop.
 --
-fullBeta :: (Γ,Term2) -> (Γ,Term2)
-fullBeta (Node "" [c1, c2], App2 t12@(Abs2 _) t2) = βRed2 (c2,t2) (c1,t12)                               -- E-AppAbs
-fullBeta (Node "" [c1, c2], App2 t1 t2)           = if t2' /= t2 then (Node "" [c1, c2'], App2  t1  t2') -- E-App2
-                                                                 else (Node "" [c1', c2], App2  t1' t2)  -- E-App1
+-- Reducing experimentally the left or the right terms of an App that isn't a redex and reducing 
+-- the other side if the first doesn't reduce doesn't work.  
+--
+-- Example in text is depth first traversal, reducing from the inside out.  How would you know an
+-- implementation like that conformed to the reduction rules?  One strategy is to try reducing 
+-- experimentally.  If the LHS doesn't reduce, try the RHS.  But this still leaves you with an
+-- outer Abs with an unreduced App inside.  Must be that a mix of reducing on one side and then
+-- the other eventually gets you to the bottom level.  Note the description of beta reduction in
+-- https://en.wikipedia.org/wiki/Lambda_calculus says "with regards to reduibility, all bets are off."
+-- If there were a definition of fully-reduced, then this could be formulated as a search across all
+-- traversals L and R until you reached a fully-reduced version.
+--
+-- What would path for canonical example (id (id (λz. id z))) look like?
+--
+--   Init  (id (id (λz. id z)))
+--   Left  (id (λz. id z))
+--   Right (id ( .. )            Nope!  Right side doesn't reduce!  Left side ends with lambda too.
+--
+--   Init  (id (id (λz. id z)))
+--   Right (id (λz. id z))
+--   Left  (λz. id z)            Nope!  Need an App to reduce under all rules.
+--
+-- There's no path following the reduction rules in the answer in the book to get to the
+-- same place as he shows in his example.  The reduction rules do not show how to reach a
+-- redex within an outer Abs.
+-- 
+fullBetaText :: (Γ,Term2) -> (Γ,Term2)
+fullBetaText (Node "" [c1, c2], App2 t12@(Abs2 _) t2) = βRed2 (c2,t2) (c1,t12)                               -- E-AppAbs
+fullBetaText (Node "" [c1, c2], App2 t1 t2)           = if t2' /= t2 then (Node "" [c1, c2'], App2  t1  t2') -- E-App2
+                                                                     else (Node "" [c1', c2], App2  t1' t2)  -- E-App1
                                                       where
-                                                        (c2',t2') = fullBeta (c2,t2)
+                                                        (c2',t2') = fullBetaText (c2,t2)
+                                                        (c1',t1') = fullBetaText (c1,t1)
+fullBetaText p = p
+
+-- | Mechanically speaking, what happens if we just provide a way to reduce within an outer
+--   Abs?  This works.  But it sure doesn't seem to follow the rules from the answer in the
+--   text.  It's hard to see just how this differs from normal order.  Maybe by the time you
+--   work through all those rules in the answer in the text you wind up with something that
+--   this implementation interprets.  Either way, as this suffices to carry out arithmetic
+--   operations on Church numerals, I don't see any reason to try to implement the other
+--   strategies.
+--   
+--   Except that something fails with prd function.
+--
+fullBeta :: (Γ,Term2) -> (Γ,Term2)
+fullBeta (Node "" [c1, c2], App2 t12@(Abs2 _) t2) = βRed2 (c2,t2) (c1,t12)
+fullBeta (Node "" [c1, c2], App2 t1 t2)           = (Node "" [c1', c2'], App2 t1' t2') 
+                                                      where
                                                         (c1',t1') = fullBeta (c1,t1)
-fullBeta p = p
-
-{--
--- | NormalOrder eval, page 56.  "Under the normal order strategy, the leftmost
---   outermost redex is always reduced first."  Also, there's allowance for
---   reduction inside abstractions and there isn't the constraint as there
---   is for call by value where " ... the redex is reduced only when its
---   right-hand side has laready been reduced to a value ...".
---
---  >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (evalCommands normalOrder cmds)) (parse parseCommands "lambda" "id = (λx.x);\n(id (id (λz. id z)));\n")
---  λz.z
---
--- Wrong!  See answer in text on page 502.
---
-normalOrder :: (Γ,Term2) -> (Γ,Term2)
-normalOrder (Node "" [c1, c2], App2 t@(Abs2 _) s) = βRed2  (c2,s) (c1,t)                                                      -- E-AppAbs
-normalOrder (Node "" [c1, c2], App2 t1 t2)        = (Node "" [c1', c2], App2  t1' t2)  where (c1',t1') = normalOrder (c1,t1)  -- E-App1
-normalOrder p = p
---}
-
--- | Lazy eval
---  
-lazy :: (Γ,Term2) -> (Γ,Term2)
-lazy (Node "" [c1, c2], App2 t@(Abs2 _) s) = βRed2  (c2,s) (c1,t)                                               -- E-AppAbs
-lazy (Node "" [c1, c2], App2 t1 t2)        = (Node "" [c1', c2], App2  t1' t2)  where (c1',t1') = lazy (c1,t1)  -- E-App1
-lazy p = p
-
+                                                        (c2',t2') = fullBeta (c2,t2)
+fullBeta (Node n [c],       Abs2 t)               = (Node n [c'], Abs2 t')
+                                                      where
+                                                        (c',t') = fullBeta (c,t)
+fullBeta p                                        = p
+ 
 -- | Eval wrapper stops at point of recurring to self (fix).
 --
 --   TBD: count terms to avoid co-recursion/unfold?
@@ -632,10 +654,10 @@ evalCommands strat cmds = map (show . PP.pretty . evalTerm1 strat env) terms
 -- >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (evalCommands callByVal cmds)) (parse parseCommands "lambda" "id = λx.x;\n(id id);\n")
 -- id
 --
-{--    
--- >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (evalCommands normalOrder cmds)) (parse parseCommands "lambda" "id = λx.x;\n(id id);\n")
+--    
+-- >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (evalCommands fullBeta cmds)) (parse parseCommands "lambda" "id = λx.x;\n(id id);\n")
 -- id
---}    
+--
 --
 readFile' :: ((Γ,Term2) -> (Γ,Term2)) -> String -> IO ()
 readFile' strat fName = parseFromFile parseCommands fName >>= either print (mapM_ putStrLn . evalCommands strat)
