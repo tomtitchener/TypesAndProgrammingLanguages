@@ -23,12 +23,15 @@ page 88:  "Just because you've implemented something doesn't mean you understand
 
 module Untyped where
 
+import           Debug.Trace                   (trace)
+
 import           Control.Monad                 (liftM, mapM_, void)
 import           Data.Either                   (either)
 import           Data.Function                 (fix)
 import           Data.List                     (elemIndices, sort, head, group, intersect, lookup, (\\), find)
-import           Data.Maybe                    (maybe)
+import           Data.Maybe                    (maybe, fromMaybe)
 import           Data.Tree                     (Tree(..))
+import           Data.Tuple                    (swap)
 import           System.Environment            (getArgs)
 import           Text.ParserCombinators.Parsec (Parser(..), (<|>), (<?>), many, many1, endBy, sepBy, lower, char, eof, parse, spaces, newline, noneOf, letter, try, parseFromFile, choice)
 import qualified Text.PrettyPrint.Leijen as PP ((<>), char, int, string, pretty, Pretty(..))
@@ -208,24 +211,48 @@ instance PP.Pretty Term2 where
 --
 type Γ = Tree Sym
 
--- | Safeguarded replacement of Term1 with pair <naming context, Term2> 
---   where test of free vars guarantees @elemIndices s path@ does not
---   answer empty list.
-removeNames' :: [Sym] -> Term1 -> (Γ,Term2)
-removeNames' path (Var s)     = (ctx, Var2 i)        where i = last (elemIndices s path); ctx = Node "" []
-removeNames' path (Abs s t)   = (ctx', Abs2 t')      where (ctx, t') = removeNames' (s:path) t; ctx' = Node s [ctx]
-removeNames' path (App t1 t2) = (ctx', App2 t1' t2') where (ctx1, t1') = removeNames' path t1; (ctx2, t2') = removeNames' path t2; ctx' = Node "" [ctx1, ctx2]
-                                                    
 -- | Convert 'Term1' to pair of context 'Γ' and (unnamed) 'Term2' for free vars ['Sym'],
 --   being careful to first check all free vars in Term1 are included in list.
 --
+--   Be careful with element index!  What I want is distance for symbol "x" from end of list.
+--   So if list is ["x","x"] and I'm trying to find the index for "x", then the answer should
+--   be 0, because looking backward up list, "x" is first element in list.  List grows from
+--   head, starting with reverse of list of globals.  So if list of globals is ["a","b","c"]
+--   then reversal is ["c","b","a"] and first Abs for "x" builds ["x","c","b","a"].  Now let's
+--   say we have Abs over "x" and I want to know what's the closest "x" looking "up" the list,
+--   then it's going to be the one at the start, or index 0.  That way, if there's an Abs that
+--   shadows a free var, then I get the index for the Abs, not the one for the free var.  The
+--   same way, if there's an inner Abs over "x" that shadows an inner one, then I get the index
+--   for the inner Abs, which is what I want--the one that's closest looking back up the list 
+--   of Abs and from there up the list of free vars.  The same way, when restoring names, be
+--   careful to reverse the list of free vars and then grow the list from the head, so the 
+--   indexes in Var2 match up.
+-- 
 -- >>>PP.pretty $ snd $ removeNames [] (Abs "x" (Var "x"))
 -- λ.0
 --
--- >>>PP.pretty $ snd $ removeNames [] (Abs "s" (Abs "z" (Var "z")))
+-- >>>PP.pretty $ snd $ removeNames [] (Abs "x" (Abs "x" (Var "x")))
 -- λ.λ.0
 --
--- >>>PP.pretty $ snd $ removeNames [] (Abs "s" (Abs "z" (App (Var "s") (App (Var "s") (Var "z")))))
+-- >>>PP.pretty $ snd $ removeNames ["x"] (Abs "x" (Abs "x" (Var "x")))
+-- λ.λ.0
+--
+-- >>>PP.pretty $ snd $ removeNames ["y"] (Abs "x" (Abs "x" (Var "y")))
+-- λ.λ.2
+--
+-- >>>PP.pretty $ snd $ removeNames ["a","b","c"] (Abs "x" (Var "c"))
+-- λ.1
+--
+-- >>>PP.pretty $ snd $ removeNames ["a","b","c"] (Abs "x" (Var "a"))
+-- λ.3
+--
+-- >>>PP.pretty $ snd $ removeNames ["x"] (Abs "x" (Var "x"))
+-- λ.0
+--
+-- >>>PP.pretty $ snd $ removeNames ["s","z"] (Abs "s" (Abs "z" (Var "z")))
+-- λ.λ.0
+--
+-- >>>PP.pretty $ snd $ removeNames ["a","b","c"] (Abs "s" (Abs "z" (App (Var "s") (App (Var "s") (Var "z")))))
 -- λ.λ.(1 (1 0))
 --
 -- >>>PP.pretty $ snd $ removeNames [] (Abs "m" (Abs "n" (Abs "s" (Abs "z" (App (Var "m") (App (Var "s") (App (Var "n") (App (Var "z") (Var "s")))))))))
@@ -235,12 +262,15 @@ removeNames' path (App t1 t2) = (ctx', App2 t1' t2') where (ctx1, t1') = removeN
 -- λ.(λ.(1 λ.((1 1) 0)) λ.(1 λ.((1 1) 0)))
 --
 removeNames :: [Sym] -> Term1 -> (Γ,Term2)
-removeNames fvars t1
-  | sort (fvars `intersect` fvars') /= sort fvars' = error $ "removeNames not all vars free in (" ++ show t1 ++ "), i.e. " ++ show fvars' ++ ", are included in " ++ show fvars ++ " " ++ show fvars'
-  | otherwise = removeNames' fvars t1
+removeNames fvars t
+  | sort (fvars `intersect` fvars') /= sort fvars' = error $ "removeNames not all vars free in (" ++ show t ++ "), i.e. " ++ show fvars' ++ ", are included in " ++ show fvars ++ " " ++ show fvars'
+  | otherwise = fun (reverse fvars) t
   where
-    fvars' = freeVars t1
-                                                    
+    fvars' = freeVars t
+    fun path (Var s)     = (ctx, Var2 i)        where i = head (elemIndices s path); ctx = Node "" []
+    fun path (Abs s t)   = (ctx', Abs2 t')      where (ctx, t') = fun (s:path) t; ctx' = Node s [ctx]
+    fun path (App t1 t2) = (ctx', App2 t1' t2') where (ctx1, t1') = fun path t1; (ctx2, t2') = fun path t2; ctx' = Node "" [ctx1, ctx2]
+    
 -- | Convert (unnamed) 'Term2' to 'Term1' for free vars ['Sym'] and context 'Γ'.
 --
 -- >>> (PP.pretty . restoreNames []) $ removeNames [] (Abs "x" (Var "x"))
@@ -286,10 +316,12 @@ removeNames fvars t1
 -- λm.λn.λs.λz.(a (b (n (z c))))
 --
 restoreNames :: [Sym] -> (Γ,Term2) -> Term1
-restoreNames path (_, Var2 i)                      = if i < length path then Var $ path !! i else error $ "restoreNames no var in " ++ show path ++ " for index " ++ show i
-restoreNames path (Node s [ctx],Abs2 t)            = Abs s $ restoreNames (s:path) (ctx, t)
-restoreNames path (Node _ [ctx1, ctx2],App2 t1 t2) = App (restoreNames path (ctx1, t1)) (restoreNames path (ctx2, t2))
-restoreNames path (ctx, t)                         = error $ "restoreNames unrecognized context " ++ show ctx ++ " for term " ++ show t
+restoreNames syms = fun (reverse syms)
+  where
+    fun path (_, Var2 i)                      = if i < length path then Var $ path !! i else error $ "fun no var in " ++ show path ++ " for index " ++ show i
+    fun path (Node s [ctx],Abs2 t)            = Abs s $ fun (s:path) (ctx, t)
+    fun path (Node _ [ctx1, ctx2],App2 t1 t2) = App (fun path (ctx1, t1)) (fun path (ctx2, t2))
+    fun path (ctx, t)                         = error $ "restoreNames unrecognized context " ++ show ctx ++ " for term " ++ show t
 
 ----------------------------
 -- Eval of nameless terms --
@@ -362,30 +394,38 @@ termSubst n (_, s) t = error $ "termSubst called with non-zero index " ++ show n
 --
 --   Generic code handles reductions for call by value, where s is only ever Abs (val)
 --   as well as other strategies, where s may be any Term.
--- 
+ -- 
 βRed2 :: (Γ,Term2) -> (Γ,Term2) -> (Γ,Term2)
 βRed2 (c1, s) (Node _ [c2], Abs2 t) = (c3, termShift (-1) t2) where (c3, t2) = termSubst 0 (c1, termShift 1 s) (c2, t)
 βRed2 s t = error $ "βRed2 unexpected types for term s " ++ show  s ++ " or t " ++ show t
 
+type EvalStrategy = ((Γ,Term2) -> (Γ,Term2))
+
 -- | Call-by-value operational semantics ("Operational Symantics", page 55) for 
 --   evaluation of nameless term following Figure 5.3 "Untyped lambda calculus (λ)",
---   details in callByVal.  Outer wrapper stops at point of recurring to self (fix).
+--   details in callByValEval.  Outer wrapper stops at point of recurring to self (fix).
 --
 --   Call-by-value example, page 55:
 --
--- >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (evalCommands callByVal cmds)) (parse parseCommands "lambda" "id = λx.x;\n(id (id (λz. id z)));\n")
+-- >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (evalCommands callByValEval cmds)) (parse parseCommands "lambda" "id = λx.x;\n(id (id (λz. id z)));\n")
 -- λz.(id z)
 --
 -- Note:  call by value leaves eval of Church numerals hanging:
 --
--- >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (evalCommands callByVal cmds)) (parse parseCommands "lambda" "zero = (λs.λz.z);\nscc = (λn.λs.λz.s (n s z));\n(scc zero);\n")
+-- >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (evalCommands callByValEval cmds)) (parse parseCommands "lambda" "zero = (λs.λz.z);\nscc = (λn.λs.λz.s (n s z));\n(scc zero);\n")
 -- λs.λz.(s ((zero s) z))
 --
-callByVal :: (Γ,Term2) -> (Γ,Term2)
-callByVal (Node "" [c1, c2], App2 t@(Abs2 _) s@(Abs2 _)) = βRed2  (c2,s) (c1,t)                                                    -- E-AppAbs
-callByVal (Node "" [c1, c2], App2 v1@(Abs2 _) t2)        = (Node "" [c1, c2'], App2  v1  t2') where (c2',t2') = callByVal (c2,t2)  -- E-App2
-callByVal (Node "" [c1, c2], App2 t1 t2)                 = (Node "" [c1', c2], App2  t1' t2)  where (c1',t1') = callByVal (c1,t1)  -- E-App1
-callByVal p = p
+-- Note:  call by value leaves eval of Church numerals hanging:
+-- Implements runtime substitution during eval vs. static substitution before eval.
+--
+-- >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (evalCommands callByValEval cmds)) (parse parseCommands "lambda" "zero = (λs.λz.z);\nscc = (λn.λs.λz.s (n s z));\n(scc zero);\n")
+-- λs.λz.(s ((zero s) z))
+--
+callByValEval :: EvalStrategy
+callByValEval (Node "" [c1, c2], App2 t@(Abs2 _) s@(Abs2 _)) = βRed2  (c2,s) (c1,t)                                                          -- E-AppAbs
+callByValEval (Node "" [c1, c2], App2 v1@(Abs2 _) t2)        = (Node "" [c1, c2'], App2  v1  t2') where (c2',t2') = callByValEval (c2,t2)  -- E-App2
+callByValEval (Node "" [c1, c2], App2 t1 t2)                 = (Node "" [c1', c2], App2  t1' t2)  where (c1',t1') = callByValEval (c1,t1)  -- E-App1
+callByValEval t@_ = t
 
 -- | Full beta reduction following instructions from answer in text.
 --
@@ -406,8 +446,8 @@ callByVal p = p
 --  But this doesn't work.  Is there something different about "non-deterministic" beta reduction from the example in the text?
 --  The eval gives λz.(id z), not λz.z.
 --
---  >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (evalCommands fullBeta cmds)) (parse parseCommands "lambda" "id = (λx.x);\n(id (id (λz. id z)));\n")
---  λz.z
+--  >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (evalCommands fullBetaEval cmds)) (parse parseCommands "lambda" "id = (λx.x);\n(id (id (λz. id z)));\n")
+--  λz.(id z)
 --
 -- Maybe traversal by pattern match of type fails due to overlap, for which ghc does give you a warning.
 -- The logic behind the evaluation relation in Figure 5-3 for the two rules E-App1 and E-App2 eludes me.
@@ -457,14 +497,14 @@ callByVal p = p
 -- same place as he shows in his example.  The reduction rules do not show how to reach a
 -- redex within an outer Abs.
 -- 
-fullBetaText :: (Γ,Term2) -> (Γ,Term2)
-fullBetaText (Node "" [c1, c2], App2 t12@(Abs2 _) t2) = βRed2 (c2,t2) (c1,t12)                               -- E-AppAbs
-fullBetaText (Node "" [c1, c2], App2 t1 t2)           = if t2' /= t2 then (Node "" [c1, c2'], App2  t1  t2') -- E-App2
+fullBetaEval :: EvalStrategy
+fullBetaEval (Node "" [c1, c2], App2 t12@(Abs2 _) t2) = βRed2 (c2,t2) (c1,t12)                               -- E-AppAbs
+fullBetaEval (Node "" [c1, c2], App2 t1 t2)           = if t2' /= t2 then (Node "" [c1, c2'], App2  t1  t2') -- E-App2
                                                                      else (Node "" [c1', c2], App2  t1' t2)  -- E-App1
-                                                      where
-                                                        (c2',t2') = fullBetaText (c2,t2)
-                                                        (c1',t1') = fullBetaText (c1,t1)
-fullBetaText p = p
+                                                          where
+                                                            (c2',t2') = fullBetaEval (c2,t2)
+                                                            (c1',t1') = fullBetaEval (c1,t1)
+fullBetaEval p = p
 
 -- | Mechanically speaking, what happens if we just provide a way to reduce within an outer
 --   Abs?  This works.  But it sure doesn't seem to follow the rules from the answer in the
@@ -473,25 +513,26 @@ fullBetaText p = p
 --   this implementation interprets.  Either way, as this suffices to carry out arithmetic
 --   operations on Church numerals, I don't see any reason to try to implement the other
 --   strategies.
---   
---   Except that something fails with prd function.
 --
-fullBeta :: (Γ,Term2) -> (Γ,Term2)
-fullBeta (Node "" [c1, c2], App2 t12@(Abs2 _) t2) = βRed2 (c2,t2) (c1,t12)
-fullBeta (Node "" [c1, c2], App2 t1 t2)           = (Node "" [c1', c2'], App2 t1' t2') 
-                                                      where
-                                                        (c1',t1') = fullBeta (c1,t1)
-                                                        (c2',t2') = fullBeta (c2,t2)
-fullBeta (Node n [c],       Abs2 t)               = (Node n [c'], Abs2 t')
-                                                      where
-                                                        (c',t') = fullBeta (c,t)
-fullBeta p                                        = p
+--  >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (evalCommands fullBetaEval' cmds)) (parse parseCommands "lambda" "id = (λx.x);\n(id (id (λz. id z)));\n")
+--  λz.z
+--
+fullBetaEval' :: EvalStrategy
+fullBetaEval' (Node "" [c1, c2], App2 t12@(Abs2 _) t2) = βRed2 (c2,t2) (c1,t12)
+fullBetaEval' (Node "" [c1, c2], App2 t1 t2)           = (Node "" [c1', c2'], App2 t1' t2') 
+                                                           where
+                                                             (c1',t1') = fullBetaEval' (c1,t1)
+                                                             (c2',t2') = fullBetaEval' (c2,t2)
+fullBetaEval' (Node n [c],       Abs2 t)               = (Node n [c'], Abs2 t')
+                                                           where
+                                                             (c',t') = fullBetaEval' (c,t)
+fullBetaEval' p                                        = p
  
 -- | Eval wrapper stops at point of recurring to self (fix).
 --
 --   TBD: count terms to avoid co-recursion/unfold?
 --
-eval :: ((Γ,Term2) -> (Γ,Term2)) -> (Γ,Term2) -> (Γ,Term2)
+eval :: EvalStrategy -> (Γ,Term2) -> (Γ,Term2)
 eval strat = fix (\v p@(_,t) -> let p'@(_, t') = strat p in if t == t' then p' else v p')
 
 -- 5.3.6 Exercise [***] Adapt these rules to describe the three other strategies for evaluation--full beta-reduction, normal order, lazy evaluation.
@@ -584,57 +625,162 @@ parseCommands = parseCommand `endBy` choice [eof, void newline, char ';' >> void
 
 -- | Symbol lookup for assignment of sym to term, e.g. @id = (λx.x);@.
 --
-type Env = [(Sym, Term1)]
+--type Env  = [(Sym, Term1)]
+type Env = [(Sym, (Γ,Term2))]
 
+{--
 -- | Traverse Term1 performing substituting syms for free Vars
 --
+subst :: Env -> Term1 -> Term1
+subst e t = subst' (freeVars t) t 
+  where
+    subst' :: [Sym] -> Term1 -> Term1
+    subst' fvars t'@(Var s)     = fromMaybe t' $ if s `elem` fvars then lookup s e else Nothing
+    subst' fvars   (Abs s t1)  = Abs s (subst' (fvars ++ (freeVars t)) t1) 
+    subst' fvars   (App t1 t2) = App (subst' (fvars ++ (freeVars t1)) t1) (subst' (fvars ++ (freeVars t2)) t2)
+
 subst :: Env -> Term1 -> Term1
 subst e t = subst' t 
   where
     frees :: [Sym]
     frees = freeVars t
     subst' :: Term1 -> Term1
-    subst' t'@(Var s)     = maybe t' id $ if elem s frees then lookup s e else Nothing
+    subst' t'@(Var s)     = fromMaybe t' $ if s `elem` frees then lookup s e else Nothing
     subst'    (Abs s t1)  = Abs s (subst' t1)
     subst'    (App t1 t2) = App (subst' t1) (subst' t2)
-    
--- | Reverse lookup by Term1 in Env, which is assoc list [(Env, Term1)]
---
--- TBD:  could this be a lookup on a reverse of the assoc list?
---
-pukool :: Env -> Term1 -> Maybe Sym
-pukool e t = fmap fst $ find (\(s,t') -> t == t') e
 
--- | Traverse Term1 performing reverse lookup on Env with each (Sym, Term1),
---   replacing Term1 with (Var s) on match.
+-- | At leaf of 'Term2', check for match of name for 'Var2' in
+--   list of free vars in 'Env'.  If there's a match, substitute
+--   'Term2' from 'Env' for 'Var2' and splice context for 'Term2'
+--   from 'Env'.  Relies on 'TermShift' to increase de Bruijn 
+--   indexes for bound vars and not free vars.  Note same 
+--   signature as EvalStrategy.
+-- 
+subst :: Env -> (Γ,Term2) -> (Γ,Term2)
+subst es p@(_, v@(Var2 i)) = if i < length es then snd (es !! i) else p 
+subst _  p                 = p
+--}
+
+
+-- | Map [(Sym, (Γ,Term2))] to [(Term1, Sym)] in first argument
+--   for lookup by Term1 in second argument and replace Term1 with
+--   (Var Sym) where lookup succeeds, else descend.
+--
+--   Bug here?  restoreNames should take gradually increasing
+--   list of free vars starting with [], then [id], then [id,tru],
+--   and etc.  Syms are in Env.  Maybe scanl so you get list that
+--   grows from empty:
+-- 
+--   Prelude> scanl (\b a -> b ++ [a]) [] [1..5]
+--   [[],[1],[1,2],[1,2,3],[1,2,3,4],[1,2,3,4,5]]
 --
 unsubst :: Env -> Term1 -> Term1
-unsubst _ t@(Var _)     = t
-unsubst e t@(Abs s t1)  = maybe t' Var (pukool e t) where t' = Abs s (unsubst e t1)
-unsubst e t@(App t1 t2) = maybe t' Var (pukool e t) where t' = App (unsubst e t1) (unsubst e t2)
+unsubst e t =
+  unsubst' t
+  where
+    -- Be careful to reconstruct list of free vars from environment.
+    syms :: [Sym]
+    syms = map fst e
+    e' :: [(Term1, Sym)] -- Term1 first for lookup
+    e' = map (\(f,(s,(c,t))) -> (restoreNames f (c,t), s)) $ zip (scanl (\ss s -> ss ++ [s]) ([head syms]) (tail syms)) e
+    unsubst' :: Term1 -> Term1
+    unsubst' t@(Var _)     = t
+    unsubst' t@(Abs s t1)  = maybe t' Var (lookup t e') where t' = Abs s (unsubst' t1)
+    unsubst' t@(App t1 t2) = maybe t' Var (lookup t e') where t' = App (unsubst' t1) (unsubst' t2)
 
--- | Capture TermCommand as list for splitting apart TermCommand adn BinderCommand.
+-- Env has only context, term pairs for previous binders.
+-- 
+-- [x,y,z] l.x
+--  3,2,1  \.1
+--
+-- d is depth, which starts at zero and counts by one for every Abs
+-- i is binder index 
+--
+-- Tricks are:
+-- 1) to recognize when i refers to an element in Env, i.e. the  free var scope,
+-- 2) to properly index into free vars where i indicates distance "looking backward"
+-- so that larger i moves you closer to start of free var list.  
+-- 
+-- At very start with depth 0, i counts directly back into free var scope,
+-- so 0 means last element in free vars, 1 means second-to-last, and etc.
+-- back to first element in stack.
+--
+-- So if length of stack is 'n', then 0 means n - 1, 1 means n - 2, and etc.
+-- so the formula would be (length stack) - (1 + i)
+--
+-- But say the outermost term is an App followed by an Abs on the left hand side.
+-- Now you're looking at d of 1.  If i is 0, then that's a reference to the binder
+-- from Abs.  You only start indexing into globals when i is 1 or greater.  Then
+-- the formula is as above.  So the result is to test i against d and only do
+-- the lookup when d > i.  Here, d is 1 and i is 0 and so you know the binding
+-- is for a enclosing Abs.  So the first test should be if (d > i).
+--
+-- Then, where we had (length stack) - (1 + i) for depth 0, now we need to take
+-- non-zero d into account.  But the thing is, i is already adjusted for the 
+-- additional distance to the enclosing context.  So the original formula holds.
+--
+--
+subst :: Env -> (Γ,Term2) -> (Γ,Term2)
+subst e t = walk (-1) $ trace ("subst t " ++ show t) t
+  where
+    walk :: Int -> (Γ,Term2) -> (Γ,Term2)
+    walk d (Node "" [], Var2 i) = if d > i then snd (e !! ((length e) - (1 + i))) else (Node "" [], Var2 i)
+    walk d (Node n [c], Abs2 t) = (Node n [c'], Abs2 t') where (c',t') = walk (1+d) (c,t)
+    walk d (Node "" [c1,c2], App2 t1 t2) = (Node "" [c1',c2'], App2 t1' t2') where (c1',t1') = walk d (c1,t1); (c2',t2') = walk d (c2,t2)
+
+-- | Capture TermCommand in list, skip BinderCommand.
 termCommand2Term1s :: Command -> [Term1]
 termCommand2Term1s (TermCommand t1) = [t1]
 termCommand2Term1s _                = []
 
 -- | Append contents for BinderCommand to list, skip TermCommand.
---
+--   Used to fold over BinderCommands in input file, where later
+--   BinderCommands may reference names for earlier BinderCommands,
+--   i.e. reference but no recursion.  Call to @map fst env@ for
+--   first arg to 'removeNames' creates list of free vars for each 
+--   successive Term2 from names for previous BinderCommands.
+--   Recreating per-command free var contexts causes problems
+--   during restoreNames after substitution during eval, because
+--   indexes to free vars vary, term-by-term.  Instead, substitute
+--   iteratively over BinderCommand terms replacing references in
+--   terminal Vars with context, term pair from previous terms in
+--   the list, one at a time, term-by-term so that the resulting 
+--   list of terms has no free var index values.  Then before eval
+--   do the same thing with target term.  Then eval doesn't have
+--   to perform substitution for free vars and resulting term can
+--   have names restored without any free var context.
+-- 
 envAndBinderCommand2Env :: Env -> Command -> Env
-envAndBinderCommand2Env env (BinderCommand s t) = env ++ [(s,subst env t)]
+envAndBinderCommand2Env env (BinderCommand s t) = env ++ [(s, subst env (removeNames (map fst env) t))]
 envAndBinderCommand2Env env _ = env
 
 -- | Given function that implements evaluation strategy in first argument, then 'Env' with global environment of
 --   assoc list of 'Sym' to 'Term2' and 'Term1', use 'Sym' from 'Env' for free vars to remove names from 'Term1',
 --   creating tuple '(Γ,Term2)', then evaluate the result and restore names using free vars and eval result.
-evalTerm1 ::  ((Γ,Term2) -> (Γ,Term2)) -> Env -> Term1 -> Term1
+--
+--   TBD:  naive substitution of names in env in term hits same problems as naive beta reduction.
+--   Rework so substitution takes place using nameless terms.  Is it possible to do that statically?
+--   Original implementation did lookup dynamically--forcing externalization of recursion which was
+--   going to be ok once I got to the fix operation.  But given pair of context and nameless term
+--   for all terms it should be possible to identify a Var2 that maps to a bound symbol and to
+--   swap in the nameless representation into the Term2.  Or is that right?  Can I do that statically
+--   and stitch together the controlling context?  I think I did it before.
+--
+--   What about iterative substitutions?  Or I guess what I do is to apply the same strategy for
+--   bound terms such that the eventual pair of context and nameless term don't have any external
+--   references.  So long as there are only back references I should be able to just fold over
+--   bound terms, accumulating context as I go along?
+--
+evalTerm1 :: EvalStrategy -> Env -> Term1 -> Term1
 evalTerm1 strat env =
-  unsubst env . restoreNames [] . eval strat . removeNames [] . subst env
+  unsubst env . restoreNames syms . eval strat . subst env . removeNames syms
+  where
+    syms = map fst env
 
 -- | Separate binders from terms in '[Command]' and then evaluate all terms using
 --   free vars with terms in binders and answer the list of resulting terms.
 --    
-evalCommands :: ((Γ,Term2) -> (Γ,Term2)) -> [Command] -> [String]
+evalCommands :: EvalStrategy -> [Command] -> [String]
 evalCommands strat cmds = map (show . PP.pretty . evalTerm1 strat env) terms
   where
     env  = foldl envAndBinderCommand2Env [] cmds
@@ -651,20 +797,20 @@ evalCommands strat cmds = map (show . PP.pretty . evalTerm1 strat env) terms
 --
 --   See "test.l" for examples.  Use this function in ghci to run file by hand:  @λ: readFile' "test.l"@.
 --
--- >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (evalCommands callByVal cmds)) (parse parseCommands "lambda" "id = λx.x;\n(id id);\n")
+-- >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (evalCommands callByValEval cmds)) (parse parseCommands "lambda" "id = λx.x;\n(id id);\n")
 -- id
 --
 --    
--- >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (evalCommands fullBeta cmds)) (parse parseCommands "lambda" "id = λx.x;\n(id id);\n")
+-- >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (evalCommands fullBetaEval' cmds)) (parse parseCommands "lambda" "id = λx.x;\n(id id);\n")
 -- id
 --
 --
-readFile' :: ((Γ,Term2) -> (Γ,Term2)) -> String -> IO ()
+readFile' :: EvalStrategy -> String -> IO ()
 readFile' strat fName = parseFromFile parseCommands fName >>= either print (mapM_ putStrLn . evalCommands strat)
 
 -- | Expects file name as single command-line argument.
 -- 
 readFile :: IO ()
-readFile = getArgs >>= readFile' callByVal . head
+readFile = getArgs >>= readFile' callByValEval . head
 
 

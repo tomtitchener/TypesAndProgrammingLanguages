@@ -75,4 +75,3 @@ n = (λn.n);
 (fst (three ss zz));
 (fst (four ss zz));
 (prd three);
-
