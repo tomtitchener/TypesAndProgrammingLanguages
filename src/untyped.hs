@@ -10,8 +10,7 @@
      - operations over church numerals
      - lists
      - real bool and nat
-     - recursion
-     - semantics:  full beta reduction, normal-order, lazy
+     - semantics: normal-order, lazy
    * housekeeping
      - split into multiple files in an untyped folder:  data.hs, parse.hs, eval.hs.
      - map Term1 and Term2 and eval and reduce to Data.Functor.Foldable
@@ -425,7 +424,7 @@ callByValEval (Node "" [c1, c2], App2 v1@(Abs2 _) t2)        = (Node "" [c1, c2'
 callByValEval (Node "" [c1, c2], App2 t1 t2)                 = (Node "" [c1', c2], App2  t1' t2)  where (c1',t1') = callByValEval (c1,t1)  -- E-App1
 callByValEval t@_ = t
 
--- | Full beta reduction following instructions from answer in text.
+-- | Full beta reduction following instructions from answer in text (page 502).
 --
 --  Rules copied from solution:
 -- 
@@ -723,4 +722,25 @@ readFile' strat fName = parseFromFile parseCommands fName >>= either print (mapM
 readFile :: IO ()
 readFile = getArgs >>= readFile' callByValEval . head
 
-
+{--
+- use prd to define sub
+- prd takes a num and answers the num that comes before it
+- sub takes two nums and subtracts the second from the first
+- each num is a lambda starting from zero one = (λs.λz.z) and
+- continuing one (λs.λz.s z), two (λs.λz.s (s z)), and etc.
+- the args to sub two one will look like:
+-   (λm.λn. ...) (λs.λz.s (s z)) (λs.λz.s z)
+- so the pattern is to supply some fun as s for num (λs.λz. ...)
+- that the num winds up applying zero, once, etc. times where
+- prd is the likely choice, so what happens if prd gets applied
+- over and over
+- you get prd (prd (prd (prd x))) so say x is 5 the answer is
+- 2, or 5 less 3
+- so working backward the implementation for sub 5 3 would look
+- like the application using 3 of prd for target 5
+- (λm.λn.n prd m)
+-
+- next is equal, which is going to look something like
+- equal a b = test (and (iszro (a - b)) (iszro (b - a)))
+- or maybe just (and (iszro (a-b)) (iszro (b-a)))
+--}
