@@ -23,8 +23,6 @@ page 88:  "Just because you've implemented something doesn't mean you understand
 
 module Untyped where
 
-import           Debug.Trace                   (trace)
-
 import           Control.Monad                 (liftM, mapM_, void)
 import           Data.Either                   (either)
 import           Data.Function                 (fix)
@@ -511,8 +509,7 @@ fullBetaEval p = p
 --   text.  It's hard to see just how this differs from normal order.  Maybe by the time you
 --   work through all those rules in the answer in the text you wind up with something that
 --   this implementation interprets.  Either way, as this suffices to carry out arithmetic
---   operations on Church numerals, I don't see any reason to try to implement the other
---   strategies.
+--   operations on Church numerals.
 --
 --  >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (evalCommands fullBetaEval' cmds)) (parse parseCommands "lambda" "id = (λx.x);\n(id (id (λz. id z)));\n")
 --  λz.z
@@ -625,108 +622,44 @@ parseCommands = parseCommand `endBy` choice [eof, void newline, char ';' >> void
 
 -- | Symbol lookup for assignment of sym to term, e.g. @id = (λx.x);@.
 --
---type Env  = [(Sym, Term1)]
 type Env = [(Sym, (Γ,Term2))]
 
-{--
--- | Traverse Term1 performing substituting syms for free Vars
---
-subst :: Env -> Term1 -> Term1
-subst e t = subst' (freeVars t) t 
-  where
-    subst' :: [Sym] -> Term1 -> Term1
-    subst' fvars t'@(Var s)     = fromMaybe t' $ if s `elem` fvars then lookup s e else Nothing
-    subst' fvars   (Abs s t1)  = Abs s (subst' (fvars ++ (freeVars t)) t1) 
-    subst' fvars   (App t1 t2) = App (subst' (fvars ++ (freeVars t1)) t1) (subst' (fvars ++ (freeVars t2)) t2)
-
-subst :: Env -> Term1 -> Term1
-subst e t = subst' t 
-  where
-    frees :: [Sym]
-    frees = freeVars t
-    subst' :: Term1 -> Term1
-    subst' t'@(Var s)     = fromMaybe t' $ if s `elem` frees then lookup s e else Nothing
-    subst'    (Abs s t1)  = Abs s (subst' t1)
-    subst'    (App t1 t2) = App (subst' t1) (subst' t2)
-
--- | At leaf of 'Term2', check for match of name for 'Var2' in
---   list of free vars in 'Env'.  If there's a match, substitute
---   'Term2' from 'Env' for 'Var2' and splice context for 'Term2'
---   from 'Env'.  Relies on 'TermShift' to increase de Bruijn 
---   indexes for bound vars and not free vars.  Note same 
---   signature as EvalStrategy.
+-- | Walk down term in second arg (t) substituting context and 
+--   term from env in first arg (e) where index for 'Var2' from term
+--   in second arg reaches back beyond depth of binders recorded
+--   in depth during walk (d), into free vars recorded by env in
+--   first arg.  Keep in mind 'Var2' index to free vars is incremented
+--   by depth, so index into free vars in Env has to be decremented
+--   by depth, then subtracted from length of environment to index
+--   back to front.  Note 'Sym' from pair in 'Env' is discarded here,
+--   and must be reconstructed during 'unsubst' below to reconstruct
+--   free vars for 'restoreNames'.
 -- 
 subst :: Env -> (Γ,Term2) -> (Γ,Term2)
-subst es p@(_, v@(Var2 i)) = if i < length es then snd (es !! i) else p 
-subst _  p                 = p
---}
+subst e = walk 0
+  where
+    walk d (Node "" [], Var2 i) = if i >= d then snd (e !! (length e - (1 + (i-d)))) else (Node "" [], Var2 i)
+    walk d (Node n [c], Abs2 t) = (Node n [c'], Abs2 t') where (c',t') = walk (1+d) (c,t)
+    walk d (Node "" [c1,c2], App2 t1 t2) = (Node "" [c1',c2'], App2 t1' t2') where (c1',t1') = walk d (c1,t1); (c2',t2') = walk d (c2,t2)
 
-
--- | Map [(Sym, (Γ,Term2))] to [(Term1, Sym)] in first argument
---   for lookup by Term1 in second argument and replace Term1 with
---   (Var Sym) where lookup succeeds, else descend.
---
---   Bug here?  restoreNames should take gradually increasing
---   list of free vars starting with [], then [id], then [id,tru],
---   and etc.  Syms are in Env.  Maybe scanl so you get list that
---   grows from empty:
--- 
---   Prelude> scanl (\b a -> b ++ [a]) [] [1..5]
---   [[],[1],[1,2],[1,2,3],[1,2,3,4],[1,2,3,4,5]]
+-- | Map @[(Sym, (Γ,Term2))]@ (e) to @[(Term1, Sym)]@ (e') in first arg
+--   for lookup by 'Term1' in second arg, then replace 'Term1' with
+--   (@Var Sym@) where lookup succeeds else descend ('unsubst'').
+--   Be careful constructing @[(Term1, Sym)]@ from @[(Sym, (Γ,Term2))]@
+--   via 'restoreNames' to reconstruct free vars for successive terms
+--   in @[(Sym, (Γ,Term2))]@ by building list of free vars from 'Sym'
+--   at beginning of 'Env' in first argument (@scanl@).
 --
 unsubst :: Env -> Term1 -> Term1
-unsubst e t =
-  unsubst' t
+unsubst e =
+  unsubst' 
   where
-    -- Be careful to reconstruct list of free vars from environment.
-    syms :: [Sym]
     syms = map fst e
-    e' :: [(Term1, Sym)] -- Term1 first for lookup
-    e' = map (\(f,(s,(c,t))) -> (restoreNames f (c,t), s)) $ zip (scanl (\ss s -> ss ++ [s]) ([head syms]) (tail syms)) e
-    unsubst' :: Term1 -> Term1
+    freeVarss = scanl (flip (:)) [head syms] (tail syms)
+    e' = map (\(f,(s,(c,t))) -> (restoreNames f (c,t), s)) $ zip freeVarss e
     unsubst' t@(Var _)     = t
     unsubst' t@(Abs s t1)  = maybe t' Var (lookup t e') where t' = Abs s (unsubst' t1)
     unsubst' t@(App t1 t2) = maybe t' Var (lookup t e') where t' = App (unsubst' t1) (unsubst' t2)
-
--- Env has only context, term pairs for previous binders.
--- 
--- [x,y,z] l.x
---  3,2,1  \.1
---
--- d is depth, which starts at zero and counts by one for every Abs
--- i is binder index 
---
--- Tricks are:
--- 1) to recognize when i refers to an element in Env, i.e. the  free var scope,
--- 2) to properly index into free vars where i indicates distance "looking backward"
--- so that larger i moves you closer to start of free var list.  
--- 
--- At very start with depth 0, i counts directly back into free var scope,
--- so 0 means last element in free vars, 1 means second-to-last, and etc.
--- back to first element in stack.
---
--- So if length of stack is 'n', then 0 means n - 1, 1 means n - 2, and etc.
--- so the formula would be (length stack) - (1 + i)
---
--- But say the outermost term is an App followed by an Abs on the left hand side.
--- Now you're looking at d of 1.  If i is 0, then that's a reference to the binder
--- from Abs.  You only start indexing into globals when i is 1 or greater.  Then
--- the formula is as above.  So the result is to test i against d and only do
--- the lookup when d > i.  Here, d is 1 and i is 0 and so you know the binding
--- is for a enclosing Abs.  So the first test should be if (d > i).
---
--- Then, where we had (length stack) - (1 + i) for depth 0, now we need to take
--- non-zero d into account.  But the thing is, i is already adjusted for the 
--- additional distance to the enclosing context.  So the original formula holds.
---
---
-subst :: Env -> (Γ,Term2) -> (Γ,Term2)
-subst e t = walk (-1) $ trace ("subst t " ++ show t) t
-  where
-    walk :: Int -> (Γ,Term2) -> (Γ,Term2)
-    walk d (Node "" [], Var2 i) = if d > i then snd (e !! ((length e) - (1 + i))) else (Node "" [], Var2 i)
-    walk d (Node n [c], Abs2 t) = (Node n [c'], Abs2 t') where (c',t') = walk (1+d) (c,t)
-    walk d (Node "" [c1,c2], App2 t1 t2) = (Node "" [c1',c2'], App2 t1' t2') where (c1',t1') = walk d (c1,t1); (c2',t2') = walk d (c2,t2)
 
 -- | Capture TermCommand in list, skip BinderCommand.
 termCommand2Term1s :: Command -> [Term1]
@@ -739,16 +672,6 @@ termCommand2Term1s _                = []
 --   i.e. reference but no recursion.  Call to @map fst env@ for
 --   first arg to 'removeNames' creates list of free vars for each 
 --   successive Term2 from names for previous BinderCommands.
---   Recreating per-command free var contexts causes problems
---   during restoreNames after substitution during eval, because
---   indexes to free vars vary, term-by-term.  Instead, substitute
---   iteratively over BinderCommand terms replacing references in
---   terminal Vars with context, term pair from previous terms in
---   the list, one at a time, term-by-term so that the resulting 
---   list of terms has no free var index values.  Then before eval
---   do the same thing with target term.  Then eval doesn't have
---   to perform substitution for free vars and resulting term can
---   have names restored without any free var context.
 -- 
 envAndBinderCommand2Env :: Env -> Command -> Env
 envAndBinderCommand2Env env (BinderCommand s t) = env ++ [(s, subst env (removeNames (map fst env) t))]
@@ -757,19 +680,6 @@ envAndBinderCommand2Env env _ = env
 -- | Given function that implements evaluation strategy in first argument, then 'Env' with global environment of
 --   assoc list of 'Sym' to 'Term2' and 'Term1', use 'Sym' from 'Env' for free vars to remove names from 'Term1',
 --   creating tuple '(Γ,Term2)', then evaluate the result and restore names using free vars and eval result.
---
---   TBD:  naive substitution of names in env in term hits same problems as naive beta reduction.
---   Rework so substitution takes place using nameless terms.  Is it possible to do that statically?
---   Original implementation did lookup dynamically--forcing externalization of recursion which was
---   going to be ok once I got to the fix operation.  But given pair of context and nameless term
---   for all terms it should be possible to identify a Var2 that maps to a bound symbol and to
---   swap in the nameless representation into the Term2.  Or is that right?  Can I do that statically
---   and stitch together the controlling context?  I think I did it before.
---
---   What about iterative substitutions?  Or I guess what I do is to apply the same strategy for
---   bound terms such that the eventual pair of context and nameless term don't have any external
---   references.  So long as there are only back references I should be able to just fold over
---   bound terms, accumulating context as I go along?
 --
 evalTerm1 :: EvalStrategy -> Env -> Term1 -> Term1
 evalTerm1 strat env =
