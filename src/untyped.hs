@@ -6,15 +6,13 @@
 
  TBD:
 
-   * doctest over untyped lambda calc examples in text
-     - operations over church numerals
-     - lists
-     - real bool and nat
-     - semantics: normal-order, lazy
    * housekeeping
      - split into multiple files in an untyped folder:  data.hs, parse.hs, eval.hs.
-     - map Term1 and Term2 and eval and reduce to Data.Functor.Foldable
-       (https://hackage.haskell.org/package/recursion-schemes) following http://dev.stephendiehl.com/hask/#recursion-schemes
+   * testing/validation
+     - add parse of comments and empty lines for file of definitions and lambda expressions
+     - consume a file of definitions (maybe just a a list of text strings with a definition per line)
+     - validate a series of lambda expressions and expected results
+     - convert single file of lamba definitions and expressions into files that validate e.g. pairs, bools, numerals, recursion, etc.
 
 page 88:  "Just because you've implemented something doesn't mean you understand it" (Brian Cantwell Smith).
 
@@ -396,6 +394,8 @@ termSubst n (_, s) t = error $ "termSubst called with non-zero index " ++ show n
 βRed2 (c1, s) (Node _ [c2], Abs2 t) = (c3, termShift (-1) t2) where (c3, t2) = termSubst 0 (c1, termShift 1 s) (c2, t)
 βRed2 s t = error $ "βRed2 unexpected types for term s " ++ show  s ++ " or t " ++ show t
 
+-- 5.3.6 Exercise [***] Adapt these rules to describe the three other strategies for evaluation--full beta-reduction, normal order, lazy evaluation.
+
 type EvalStrategy = ((Γ,Term2) -> (Γ,Term2))
 
 -- | Call-by-value operational semantics ("Operational Symantics", page 55) for 
@@ -530,8 +530,6 @@ fullBetaEval' p                                        = p
 --
 eval :: EvalStrategy -> (Γ,Term2) -> (Γ,Term2)
 eval strat = fix (\v p@(_,t) -> let p'@(_, t') = strat p in if t == t' then p' else v p')
-
--- 5.3.6 Exercise [***] Adapt these rules to describe the three other strategies for evaluation--full beta-reduction, normal order, lazy evaluation.
 
 -----------
 -- Parse --
