@@ -2,7 +2,7 @@
   Evaluation routines for untyped calculus.
 --}
 module Untyped.Eval(
-    eval1
+    namedλTermEval
   , EvalStrategy
   , callByValEval
   , fullBetaEval
@@ -14,7 +14,7 @@ import Data.Function                 (fix)
 import Data.List                     (elemIndices, sort, head, group, intersect, lookup, (\\))
 import Data.Tree                     (Tree(..))
 import Text.PrettyPrint.Leijen       (pretty)
-import Untyped.Data                  (Sym,Term1(..), Term2(..))
+import Untyped.Data                  (Sym,NamedλTerm(..), UnnamedλTerm(..))
 import Untyped.Parse                 (Command(..), parseCommands)
 import Text.ParserCombinators.Parsec (parse)
 
@@ -30,12 +30,12 @@ import Text.ParserCombinators.Parsec (parse)
 unique :: (Eq a, Ord a) => [a] -> [a]
 unique = map head . group . sort
 
--- | Answer list of of free variables in 'Term1'
+-- | Answer list of of free variables in 'NamedλTerm'
 --
 -- >>> freeVars (App (Var "a") (Var "b"))
 -- ["a","b"]
 --
-freeVars :: Term1 -> [Sym]
+freeVars :: NamedλTerm -> [Sym]
 freeVars (Var s)     = [s]
 freeVars (Abs s t)   = freeVars t \\ [s]
 freeVars (App t1 t2) = unique $ freeVars t1 ++ freeVars t2
@@ -57,7 +57,7 @@ freeVars (App t1 t2) = unique $ freeVars t1 ++ freeVars t2
 --
 --   Page 55, "Operational Semantics"
 --
---   beta reduce 'Term1' t12 for 'Sym' 'x' in 'Term1' t1
+--   beta reduce 'NamedλTerm' t12 for 'Sym' 'x' in 'NamedλTerm' t1
 --
 --   Naive: subst x in s with y
 --
@@ -65,7 +65,7 @@ freeVars (App t1 t2) = unique $ freeVars t1 ++ freeVars t2
 --   [x⟼s]y => subst x with s in y
 --   @
 --
-βRed1 :: String -> Term1 -> Term1 -> Term1
+βRed1 :: String -> NamedλTerm -> NamedλTerm -> NamedλTerm
 βRed1 x s (Var y)
   | y == x    = s
   | otherwise = Var y
@@ -74,15 +74,15 @@ freeVars (App t1 t2) = unique $ freeVars t1 ++ freeVars t2
   | otherwise                          = Abs y t
 βRed1 x s (App t1 t2) = App (βRed1 x s t1) (βRed1 x s t2)
 
--- | Eval a 'Term1' "up to renaming of bound variables"
+-- | Eval a 'NamedλTerm' "up to renaming of bound variables"
 -- 
---   TBD:  naive recursion on structure of Term1.  What are operational semantics?
+--   TBD:  naive recursion on structure of NamedλTerm.  What are operational semantics?
 --   Show example of failure of variable capture.
 --
 -- >>>pretty (App (Abs "x" (Abs "y" (Var "x"))) (Abs "z" (App (Var "z") (Var "w"))))
 -- (λx.λy.x λz.(z w))
 --
--- >>>pretty . eval1 $ (App (Abs "x" (Abs "y" (Var "x"))) (Abs "z" (App (Var "z") (Var "w"))))
+-- >>>pretty . namedλTermEval $ (App (Abs "x" (Abs "y" (Var "x"))) (Abs "z" (App (Var "z") (Var "w"))))
 -- λy.λz.(z w)
 --
 -- Same as [x ⟼ λz.z w] λy.x
@@ -95,7 +95,7 @@ freeVars (App t1 t2) = unique $ freeVars t1 ++ freeVars t2
 -- >>>pretty (App (Abs "x" (Abs "x" (Var "x"))) (Var "y"))
 -- (λx.λx.x y)
 --
--- >>>pretty . eval1 $ (App (Abs "x" (Abs "x" (Var "x"))) (Var "y"))
+-- >>>pretty . namedλTermEval $ (App (Abs "x" (Abs "x" (Var "x"))) (Var "y"))
 -- λx.x
 --
 -- Same as [x ⟼ y] λx.x
@@ -108,7 +108,7 @@ freeVars (App t1 t2) = unique $ freeVars t1 ++ freeVars t2
 -- >>>pretty $ (App (Abs "x" (Abs "z" (Var "x"))) (Var "z"))
 -- (λx.λz.x z)
 --
--- >>>pretty . eval1 $ (App (Abs "x" (Abs "z" (Var "x"))) (Var "z"))
+-- >>>pretty . namedλTermEval $ (App (Abs "x" (Abs "z" (Var "x"))) (Var "z"))
 -- λz.x
 --
 -- Same as [x⟼z] λz.x
@@ -118,7 +118,7 @@ freeVars (App t1 t2) = unique $ freeVars t1 ++ freeVars t2
 --
 -- but [x ⟼y z] λy.x y (page 71)
 --
--- >>>pretty . eval1 $ (App (Abs "x" (Abs "y" (App (Var "x") (Var "y")))) (App (Var "y") (Var "z")))
+-- >>>pretty . namedλTermEval $ (App (Abs "x" (Abs "y" (App (Var "x") (Var "y")))) (App (Var "y") (Var "z")))
 -- λy.(x y)
 --
 -- Same as
@@ -126,11 +126,11 @@ freeVars (App t1 t2) = unique $ freeVars t1 ++ freeVars t2
 -- >>>pretty $ βRed1 "x" (App (Var "y") (Var "z")) (Abs "y" (App (Var "x") (Var "y")))
 -- λy.(x y)
 --
-eval1 :: Term1 -> Term1
-eval1 v@(Var _)         = v
-eval1 a@(Abs _ _)       = a
-eval1 (App (Abs x y) s) = eval1 $ βRed1 x s y
-eval1 (App t1 t2)       = App (eval1 t1) (eval1 t2)
+namedλTermEval :: NamedλTerm -> NamedλTerm
+namedλTermEval v@(Var _)         = v
+namedλTermEval a@(Abs _ _)       = a
+namedλTermEval (App (Abs x y) s) = namedλTermEval $ βRed1 x s y
+namedλTermEval (App t1 t2)       = App (namedλTermEval t1) (namedλTermEval t2)
 
 --------------------------------------------
 -- 2:  untyped calculus de Bruijn indexes --
@@ -154,8 +154,8 @@ eval1 (App t1 t2)       = App (eval1 t1) (eval1 t2)
 --
 type Γ = Tree Sym
 
--- | Convert 'Term1' to pair of context 'Γ' and (unnamed) 'Term2' for free vars ['Sym'],
---   being careful to first check all free vars in Term1 are included in list.
+-- | Convert 'NamedλTerm' to pair of context 'Γ' and (unnamed) 'UnnamedλTerm' for free vars ['Sym'],
+--   being careful to first check all free vars in NamedλTerm are included in list.
 --
 --   Be careful with element index!  What I want is distance for symbol "x" from end of list.
 --   So if list is ["x","x"] and I'm trying to find the index for "x", then the answer should
@@ -204,7 +204,7 @@ type Γ = Tree Sym
 -- >>>pretty $ snd $ removeNames [] (Abs "f" (App (Abs "x" (App (Var "f") (Abs "y" (App (App (Var "x") (Var "x")) (Var "y"))))) (Abs "x" (App (Var "f") (Abs "y" (App (App (Var "x") (Var "x")) (Var "y")))))))
 -- λ.(λ.(1 λ.((1 1) 0)) λ.(1 λ.((1 1) 0)))
 --
-removeNames :: [Sym] -> Term1 -> (Γ,Term2)
+removeNames :: [Sym] -> NamedλTerm -> (Γ,UnnamedλTerm)
 removeNames fvars t
   | sort (fvars `intersect` fvars') /= sort fvars' = error $ "removeNames not all vars free in (" ++ show t ++ "), i.e. " ++ show fvars' ++ ", are included in " ++ show fvars ++ " " ++ show fvars'
   | otherwise = fun (reverse fvars) t
@@ -214,7 +214,7 @@ removeNames fvars t
     fun path (Abs s t)   = (ctx', Abs2 t')      where (ctx, t') = fun (s:path) t; ctx' = Node s [ctx]
     fun path (App t1 t2) = (ctx', App2 t1' t2') where (ctx1, t1') = fun path t1; (ctx2, t2') = fun path t2; ctx' = Node "" [ctx1, ctx2]
     
--- | Convert (unnamed) 'Term2' to 'Term1' for free vars ['Sym'] and context 'Γ'.
+-- | Convert (unnamed) 'UnnamedλTerm' to 'NamedλTerm' for free vars ['Sym'] and context 'Γ'.
 --
 -- >>> (pretty . restoreNames []) $ removeNames [] (Abs "x" (Var "x"))
 -- λx.x
@@ -258,7 +258,7 @@ removeNames fvars t
 -- >>> (pretty . restoreNames ["a","b","c"]) $ removeNames ["a","b","c"] (Abs "m" (Abs "n" (Abs "s" (Abs "z" (App (Var "a") (App (Var "b") (App (Var "n") (App (Var "z") (Var "c")))))))))
 -- λm.λn.λs.λz.(a (b (n (z c))))
 --
-restoreNames :: [Sym] -> (Γ,Term2) -> Term1
+restoreNames :: [Sym] -> (Γ,UnnamedλTerm) -> NamedλTerm
 restoreNames syms = fun (reverse syms)
   where
     fun path (_, Var2 i)                      = if i < length path then Var $ path !! i else error $ "fun no var in " ++ show path ++ " for index " ++ show i
@@ -293,10 +293,10 @@ restoreNames syms = fun (reverse syms)
 -- >>> termShift 1 (Abs2 (Abs2 (Abs2 (Var2 3))))
 -- Abs2 (Abs2 (Abs2 (Var2 4)))
 --    
-termShift :: Int -> Term2 -> Term2
+termShift :: Int -> UnnamedλTerm -> UnnamedλTerm
 termShift d = walk 0
   where
-    walk :: Int -> Term2 -> Term2
+    walk :: Int -> UnnamedλTerm -> UnnamedλTerm
     walk c (Var2 i)     = if i >= c then Var2 (i+d) else Var2 i
     walk c (Abs2 t1)    = Abs2 $ walk (c+1) t1
     walk c (App2 t1 t2) = App2 (walk c t1) (walk c t2)
@@ -313,17 +313,17 @@ termShift d = walk 0
 --  >>> snd $ termSubst 0 (Node "x" [Node "" []], Abs2 (Var2 0)) (Node "x" [Node "" []], Abs2 (Var2 0))
 --  Abs2 (Var2 0)
 --
-termSubst :: Int -> (Γ,Term2) -> (Γ,Term2) -> (Γ,Term2)
+termSubst :: Int -> (Γ,UnnamedλTerm) -> (Γ,UnnamedλTerm) -> (Γ,UnnamedλTerm)
 termSubst 0 (c1, s) t = walk 0 t
   where
-    walk :: Int -> (Γ,Term2) -> (Γ,Term2)
+    walk :: Int -> (Γ,UnnamedλTerm) -> (Γ,UnnamedλTerm)
     walk c p@(_,                  Var2 i)     = if i == 0 + c then (c1, termShift c s) else p
     walk c (Node x [ctx],         Abs2 t1)    = (Node x [ctx'], Abs2 t2) where (ctx', t2) = walk (c+1) (ctx, t1)
     walk c (Node "" [ctx1, ctx2], App2 t1 t2) = (Node "" [ctx1', ctx2'], App2 t1' t2') where (ctx1', t1') = walk c (ctx1, t1); (ctx2', t2') = walk c (ctx2, t2)
     walk c t = error $ "termSubst walk unexpected arg vals c " ++ show c ++ " t " ++ show t 
 termSubst n (_, s) t = error $ "termSubst called with non-zero index " ++ show n ++ " for terms s " ++ show s ++ " and t " ++ show t
 
--- | Substitute 'Term2 s' in first argument in inner term of 'Term2 t'
+-- | Substitute 'UnnamedλTerm s' in first argument in inner term of 'UnnamedλTerm t'
 --   in second argument.  Implements application of t1 and s--(t1 s)--where
 --   t1 is an abstractions and t is the term within abstraction t1 and s
 --   is the value to substitute for top-level index 0 in t1.
@@ -334,13 +334,13 @@ termSubst n (_, s) t = error $ "termSubst called with non-zero index " ++ show n
 --   Generic code handles reductions for call by value, where s is only ever Abs (val)
 --   as well as other strategies, where s may be any Term.
  -- 
-βRed2 :: (Γ,Term2) -> (Γ,Term2) -> (Γ,Term2)
+βRed2 :: (Γ,UnnamedλTerm) -> (Γ,UnnamedλTerm) -> (Γ,UnnamedλTerm)
 βRed2 (c1, s) (Node _ [c2], Abs2 t) = (c3, termShift (-1) t2) where (c3, t2) = termSubst 0 (c1, termShift 1 s) (c2, t)
 βRed2 s t = error $ "βRed2 unexpected types for term s " ++ show  s ++ " or t " ++ show t
 
 -- 5.3.6 Exercise [***] Adapt these rules to describe the three other strategies for evaluation--full beta-reduction, normal order, lazy evaluation.
 
-type EvalStrategy = ((Γ,Term2) -> (Γ,Term2))
+type EvalStrategy = ((Γ,UnnamedλTerm) -> (Γ,UnnamedλTerm))
 
 -- | Call-by-value operational semantics ("Operational Symantics", page 55) for 
 --   evaluation of nameless term following Figure 5.3 "Untyped lambda calculus (λ)",
@@ -363,7 +363,7 @@ type EvalStrategy = ((Γ,Term2) -> (Γ,Term2))
 -- λs.λz.(s ((zero s) z))
 --
 callByValEval :: EvalStrategy
-callByValEval (Node "" [c1, c2], App2 t@(Abs2 _) s@(Abs2 _)) = βRed2  (c2,s) (c1,t)                                                          -- E-AppAbs
+callByValEval (Node "" [c1, c2], App2 t@(Abs2 _) s@(Abs2 _)) = βRed2  (c2,s) (c1,t)                                                        -- E-AppAbs
 callByValEval (Node "" [c1, c2], App2 v1@(Abs2 _) t2)        = (Node "" [c1, c2'], App2  v1  t2') where (c2',t2') = callByValEval (c2,t2)  -- E-App2
 callByValEval (Node "" [c1, c2], App2 t1 t2)                 = (Node "" [c1', c2], App2  t1' t2)  where (c1',t1') = callByValEval (c1,t1)  -- E-App1
 callByValEval t@_ = t
@@ -472,7 +472,7 @@ fullBetaEval p                                        = p
 --
 --   TBD: count terms to avoid co-recursion/unfold?
 --
-eval :: EvalStrategy -> (Γ,Term2) -> (Γ,Term2)
+eval :: EvalStrategy -> (Γ,UnnamedλTerm) -> (Γ,UnnamedλTerm)
 eval strat = fix (\v p@(_,t) -> let p'@(_, t') = strat p in if t == t' then p' else v p')
 
 -----------------------------------------------------
@@ -481,7 +481,7 @@ eval strat = fix (\v p@(_,t) -> let p'@(_, t') = strat p in if t == t' then p' e
                    
 -- | Symbol lookup for assignment of sym to term, e.g. @id = (λx.x);@.
 --
-type Env = [(Sym, (Γ,Term2))]
+type Env = [(Sym, (Γ,UnnamedλTerm))]
 
 -- | Walk down term in second arg (t) substituting context and 
 --   term from env in first arg (e) where index for 'Var2' from term
@@ -494,22 +494,22 @@ type Env = [(Sym, (Γ,Term2))]
 --   and must be reconstructed during 'unsubst' below to reconstruct
 --   free vars for 'restoreNames'.
 -- 
-subst :: Env -> (Γ,Term2) -> (Γ,Term2)
+subst :: Env -> (Γ,UnnamedλTerm) -> (Γ,UnnamedλTerm)
 subst e = walk 0
   where
     walk d (Node "" [], Var2 i) = if i >= d then snd (e !! (length e - (1 + (i-d)))) else (Node "" [], Var2 i)
     walk d (Node n [c], Abs2 t) = (Node n [c'], Abs2 t') where (c',t') = walk (1+d) (c,t)
     walk d (Node "" [c1,c2], App2 t1 t2) = (Node "" [c1',c2'], App2 t1' t2') where (c1',t1') = walk d (c1,t1); (c2',t2') = walk d (c2,t2)
 
--- | Map @[(Sym, (Γ,Term2))]@ (e) to @[(Term1, Sym)]@ (e') in first arg
---   for lookup by 'Term1' in second arg, then replace 'Term1' with
+-- | Map @[(Sym, (Γ,UnnamedλTerm))]@ (e) to @[(NamedλTerm, Sym)]@ (e') in first arg
+--   for lookup by 'NamedλTerm' in second arg, then replace 'NamedλTerm' with
 --   (@Var Sym@) where lookup succeeds else descend ('unsubst'').
---   Be careful constructing @[(Term1, Sym)]@ from @[(Sym, (Γ,Term2))]@
+--   Be careful constructing @[(NamedλTerm, Sym)]@ from @[(Sym, (Γ,UnnamedλTerm))]@
 --   via 'restoreNames' to reconstruct free vars for successive terms
---   in @[(Sym, (Γ,Term2))]@ by building list of free vars from 'Sym'
+--   in @[(Sym, (Γ,UnnamedλTerm))]@ by building list of free vars from 'Sym'
 --   at beginning of 'Env' in first argument (@scanl@).
 --
-unsubst :: Env -> Term1 -> Term1
+unsubst :: Env -> NamedλTerm -> NamedλTerm
 unsubst e =
   unsubst' 
   where
@@ -521,27 +521,27 @@ unsubst e =
     unsubst' t@(App t1 t2) = maybe t' Var (lookup t e') where t' = App (unsubst' t1) (unsubst' t2)
 
 -- | Capture TermCommand in list, skip BinderCommand.
-termCommand2Term1s :: Command -> [Term1]
-termCommand2Term1s (TermCommand t1) = [t1]
-termCommand2Term1s _                = []
+termCommand2NamedλTerms :: Command -> [NamedλTerm]
+termCommand2NamedλTerms (TermCommand t1) = [t1]
+termCommand2NamedλTerms _                = []
 
 -- | Append contents for BinderCommand to list, skip TermCommand.
 --   Used to fold over BinderCommands in input file, where later
 --   BinderCommands may reference names for earlier BinderCommands,
 --   i.e. reference but no recursion.  Call to @map fst env@ for
 --   first arg to 'removeNames' creates list of free vars for each 
---   successive Term2 from names for previous BinderCommands.
+--   successive UnnamedλTerm from names for previous BinderCommands.
 -- 
 envAndBinderCommand2Env :: Env -> Command -> Env
 envAndBinderCommand2Env env (BinderCommand s t) = env ++ [(s, subst env (removeNames (map fst env) t))]
 envAndBinderCommand2Env env _ = env
 
 -- | Given function that implements evaluation strategy in first argument, then 'Env' with global environment of
---   assoc list of 'Sym' to 'Term2' and 'Term1', use 'Sym' from 'Env' for free vars to remove names from 'Term1',
---   creating tuple '(Γ,Term2)', then evaluate the result and restore names using free vars and eval result.
+--   assoc list of 'Sym' to 'UnnamedλTerm' and 'NamedλTerm', use 'Sym' from 'Env' for free vars to remove names from 'NamedλTerm',
+--   creating tuple '(Γ,UnnamedλTerm)', then evaluate the result and restore names using free vars and eval result.
 --
-evalTerm1 :: EvalStrategy -> Env -> Term1 -> Term1
-evalTerm1 strat env =
+evalNamedλTerm :: EvalStrategy -> Env -> NamedλTerm -> NamedλTerm
+evalNamedλTerm strat env =
   unsubst env . restoreNames syms . eval strat . subst env . removeNames syms
   where
     syms = map fst env
@@ -550,8 +550,8 @@ evalTerm1 strat env =
 --   free vars with terms in binders and answer the list of resulting terms.
 --    
 evalCommands :: EvalStrategy -> [Command] -> [String]
-evalCommands strat cmds = map (show . pretty . evalTerm1 strat env) terms
+evalCommands strat cmds = map (show . pretty . evalNamedλTerm strat env) terms
   where
     env  = foldl envAndBinderCommand2Env [] cmds
-    terms = concatMap termCommand2Term1s cmds
+    terms = concatMap termCommand2NamedλTerms cmds
 

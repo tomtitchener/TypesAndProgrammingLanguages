@@ -1,8 +1,8 @@
 module Untyped (
-    Term1(..)
-  , Term2(..)
-  , eval1
+    NamedλTerm(..)
+  , UnnamedλTerm(..)
   , EvalStrategy
+  , namedλTermEval
   , callByValEval
   , fullBetaEval
   , eval
