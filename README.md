@@ -10,7 +10,6 @@ Examples from "Types and Programming Languages" Benjamin Pierce.
 TBD:
 
   * testing/validation
-    - add parse of comments and empty lines for file of definitions and lambda expressions
     - consume a file of definitions (maybe just a a list of text strings with a definition per line)
     - validate a series of lambda expressions and expected results
     - convert single file of lamba definitions and expressions into files that validate e.g. pairs, bools, numerals, recursion, etc.

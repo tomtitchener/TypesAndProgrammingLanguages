@@ -89,7 +89,7 @@ parseTermCommand :: Parser Command
 parseTermCommand = liftM TermCommand parseTerm <?> "term command"
 
 parseBinderCommand :: Parser Command
-parseBinderCommand = parseId >>= \i -> spaces >> char '=' >> spaces >> parseTerm >>= \t -> return (BinderCommand i t) <?> "binder command"
+parseBinderCommand = spaces >> parseId >>= \i -> spaces >> char '=' >> spaces >> parseTerm >>= \t -> return (BinderCommand i t) <?> "binder command"
 
 parseComment :: Parser Command
 parseComment = char '#' >> many (noneOf "\n") >> return Comment <?> "comment"
