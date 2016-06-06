@@ -1,3 +1,4 @@
+# comment, must be on line all to itself, no trailing comments allowed
 id = (λx.x);
 tru = (λt.λf.t);
 fls = (λt.λf.f);

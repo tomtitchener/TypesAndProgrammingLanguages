@@ -15,7 +15,7 @@ import Untyped.Data                  (Sym, NamedλTerm(..))
 -- Parse --
 -----------
 
-data Command = TermCommand NamedλTerm | BinderCommand Sym NamedλTerm deriving (Eq, Show)
+data Command = TermCommand NamedλTerm | BinderCommand Sym NamedλTerm | Comment deriving (Eq, Show)
 
 -- | Id can't have λ, dot, parens, or space, because just 'lower' seems 
 --   to catch λ.  Parse of id is distinct because 'Abs' needs it plan as 
@@ -28,7 +28,7 @@ data Command = TermCommand NamedλTerm | BinderCommand Sym NamedλTerm deriving 
 -- Right "id"
 --
 parseId :: Parser Sym
-parseId = many1 (noneOf "λ.(); ")
+parseId = many1 (noneOf "#λ.(); ")
 
 -- | 'Var' just wraps id.
 -- 
@@ -91,8 +91,11 @@ parseTermCommand = liftM TermCommand parseTerm <?> "term command"
 parseBinderCommand :: Parser Command
 parseBinderCommand = parseId >>= \i -> spaces >> char '=' >> spaces >> parseTerm >>= \t -> return (BinderCommand i t) <?> "binder command"
 
+parseComment :: Parser Command
+parseComment = char '#' >> many (noneOf "\n") >> return Comment <?> "comment"
+
 parseCommand :: Parser Command
-parseCommand = parseBinderCommand <|> parseTermCommand <?> "command"
+parseCommand = parseBinderCommand <|> parseTermCommand <|> parseComment <?> "command"
 
 -- | Parse list of (possibly intermingled) list of 'Command' each of which is either a 'BinderCommand' with a 'Sym' and a 'NamedλTerm', separated by @=@, e.g.
 --
