@@ -1,5 +1,12 @@
 {-
   Data types for untyped lambda calculus with and without names.
+  NB:  it's possible to do this and much of boilerplate descents
+       along recursive data types with Haskell typeclass magic, 
+       see:
+         * http://dev.stephendiehl.com/hask/#interpreters
+         * http://dev.stephendiehl.com/hask/#languages
+       The drawback is you have to use a number of language
+       extensions, so the code gets terse and opaque.
 -}
 module Untyped.Data (
     Sym
