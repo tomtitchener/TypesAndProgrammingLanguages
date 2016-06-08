@@ -1,20 +1,3 @@
-{--
-
- Examples from "Types and Programming Languages" Benjamin Pierce.
- 1) Untyped lambda calculus with beta reduction "up to renaming of bound variables"
- 2) Untyped lambda calculus with de Bruijn presentation and full beta reduction
-
- TBD:
-
-   * testing/validation
-     - add parse of comments and empty lines for file of definitions and lambda expressions
-     - consume a file of definitions (maybe just a a list of text strings with a definition per line)
-     - validate a series of lambda expressions and expected results
-     - convert single file of lamba definitions and expressions into files that validate e.g. pairs, bools, numerals, recursion, etc.
-
-page 88:  "Just because you've implemented something doesn't mean you understand it" (Brian Cantwell Smith).
---}
-
 module Main where
 
 import Prelude                       hiding (readFile)
@@ -31,7 +14,7 @@ import Untyped                       (EvalStrategy, parseCommands, evalCommands,
 --   (id id);
 --   @
 --
---   See "test.l" for examples.  Use this function in ghci to run file by hand:  @λ: readFile' "test.l"@.
+--   See "test" for examples.  Use this function in ghci to run file by hand:  @λ: readFile' "foo.l"@.
 --
 -- >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (evalCommands callByValEval cmds)) (parse parseCommands "lambda" "id = λx.x;\n(id id);\n")
 -- id
@@ -49,6 +32,64 @@ readFile' strat fName = parseFromFile parseCommands fName >>= either print (mapM
 readFile :: EvalStrategy -> IO ()
 readFile strat = getArgs >>= readFile' strat . head
 
+-- | Church booleans
+--
+-- >>> readFile' fullBetaEval "./test/bool.l"
+-- l
+-- m
+-- tru
+-- fls
+-- fls
+-- fls
+-- tru
+-- tru
+-- tru
+-- fls
+-- fls
+-- tru
+-- tru
+-- fls
+--
+-- | Church numerals
+--
+-- >>> readFile' fullBetaEval "./test/num.l"
+-- one
+-- one
+-- zero
+-- one
+-- two
+-- three
+-- four
+-- four
+-- zero
+-- zero
+-- one
+-- two
+-- four
+-- one
+-- one
+-- nine
+-- fls
+-- tru
+-- zero
+-- zero
+-- one
+-- two
+-- one
+-- two
+-- three
+-- tru
+-- fls
+-- tru
+-- tru
+-- fls
+--
+-- | Recursion
+-- 
+-- >>> readFile' fullBetaEval "./test/recur.l"
+-- omega
+-- twentyfour
+--
 main :: IO ()
 main = readFile fullBetaEval
 
