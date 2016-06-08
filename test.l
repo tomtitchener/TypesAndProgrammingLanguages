@@ -1,7 +1,6 @@
 # comment, must be on line all to itself, no trailing comments allowed
 id = (λx.x);
 # empty lines permitted
-
 tru = (λt.λf.t);
 fls = (λt.λf.f);
 test = (λl.λm.λn. l m n);
@@ -85,7 +84,6 @@ fact = (fix factg);
 (prd one);
 (prd two);
 (prd three);
-(omega);
 (sub two one);
 (sub three one);
 (sub nine six);
@@ -94,4 +92,5 @@ fact = (fix factg);
 (equal zero zero);
 (equal nine nine);
 (equal nine zero);
+(omega);
 (fact four);
