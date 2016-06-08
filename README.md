@@ -16,7 +16,7 @@ TBD:
 
 page 88:  "Just because you've implemented something doesn't mean you understand it" (Brian Cantwell Smith).
 
-Doctest:
+Doctest:  run by hand as below or "stack test".
 
   * doctest -i./src/ ./src/untyped/data.hs 
   * doctest -i./src/ ./src/untyped/parse.hs 

@@ -8,7 +8,7 @@ module Untyped.Parse(
   ) where
 
 import Control.Monad                 (liftM, void)
-import Text.ParserCombinators.Parsec (Parser(..), (<|>), (<?>), many, many1, endBy, sepBy, lower, char, eof, parse, spaces, newline, noneOf, letter, try, parseFromFile, choice)
+import Text.ParserCombinators.Parsec (Parser(..), (<|>), (<?>), many, many1, endBy, lower, char, eof, parse, spaces, newline, noneOf, letter, try, parseFromFile, choice)
 import Untyped.Data                  (Sym, NamedλTerm(..))
 
 -----------
@@ -52,17 +52,6 @@ parseVar = liftM Var parseId
 parseAbs :: Parser NamedλTerm
 parseAbs = char 'λ' >> parseId >>= \v -> spaces >> char '.' >> spaces >> parseTerm >>= \e -> return $ Abs v e
 
--- | One or more in a row, nested left.
---
--- >>> parse parseAppTerm "test" "x y"
--- Right (App (Var "x") (Var "y"))
---
--- >>> parse parseAppTerm "test" "x y z"
--- Right (App (App (Var "x") (Var "y")) (Var "z"))
---
-parseAppTerm :: Parser NamedλTerm
-parseAppTerm = liftM (foldl1 App) (many1 parseATerm)
-
 -- | Parse according to parentheses.
 --
 -- >>> parse parseATerm "test" "(a(b(c d)))"
@@ -73,6 +62,17 @@ parseAppTerm = liftM (foldl1 App) (many1 parseATerm)
 -- 
 parseATerm :: Parser NamedλTerm
 parseATerm = (char '(' >> parseTerm >>= \e -> char ')' >> spaces >> return e) <|> (parseVar >>= \v -> spaces >> return v)
+
+-- | One or more in a row, nested left.
+--
+-- >>> parse parseAppTerm "test" "x y"
+-- Right (App (Var "x") (Var "y"))
+--
+-- >>> parse parseAppTerm "test" "x y z"
+-- Right (App (App (Var "x") (Var "y")) (Var "z"))
+--
+parseAppTerm :: Parser NamedλTerm
+parseAppTerm = liftM (foldl1 App) (many1 parseATerm)
 
 -- | Parse a Term 
 -- 
@@ -86,16 +86,16 @@ parseTerm :: Parser NamedλTerm
 parseTerm = parseAppTerm <|> parseAbs
 
 parseTermCommand :: Parser Command
-parseTermCommand = liftM TermCommand parseTerm <?> "term command"
+parseTermCommand = liftM TermCommand (spaces >> parseTerm) <?> "term command"
 
 parseBinderCommand :: Parser Command
 parseBinderCommand = spaces >> parseId >>= \i -> spaces >> char '=' >> spaces >> parseTerm >>= \t -> return (BinderCommand i t) <?> "binder command"
 
 parseComment :: Parser Command
-parseComment = char '#' >> many (noneOf "\n") >> return Comment <?> "comment"
+parseComment = spaces >> char '#' >> many (noneOf "\n") >> return Comment <?> "comment"
 
 parseCommand :: Parser Command
-parseCommand = parseBinderCommand <|> parseTermCommand <|> parseComment <?> "command"
+parseCommand = try parseBinderCommand <|> try parseTermCommand <|> try parseComment <?> "command"
 
 -- | Parse list of (possibly intermingled) list of 'Command' each of which is either a 'BinderCommand' with a 'Sym' and a 'NamedλTerm', separated by @=@, e.g.
 --
@@ -105,17 +105,17 @@ parseCommand = parseBinderCommand <|> parseTermCommand <|> parseComment <?> "com
 --
 --     @(id id);@
 --
---   Must end with empty line, no empty lines allowed between terms, no comments, e.g.:
---
 --   @
+--   # comment here
 --   id = (λx.x);
+--   # empty lines permitted
+--   
 --   tru = (λt.λf.t);
 --   fls = (λt.λf.f);
 --   test = (λl.λm.λn. l m n);
 --   (id id);
 --   (test tru (λv.v) (λw.w));
 --   (test fls (λv.v) (λw.w));
---   
 --   @
 --
 parseCommands :: Parser [Command]

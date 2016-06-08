@@ -1,7 +1,7 @@
 # comment, must be on line all to itself, no trailing comments allowed
 id = (λx.x);
+# empty lines permitted
 
-# empty lines permitted though
 tru = (λt.λf.t);
 fls = (λt.λf.f);
 test = (λl.λm.λn. l m n);
