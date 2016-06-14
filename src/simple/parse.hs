@@ -28,7 +28,7 @@ data Command = TermCommand NamedTerm | BinderCommand Sym NamedTerm | Comment der
 -- Right "id"
 --
 parseId :: Parser Sym
-parseId = many1 (noneOf "#λ.();: ")
+parseId = many1 (noneOf "#λ.();:Itf ")
 
 -- | 'Var' just wraps id.
 -- 
@@ -43,38 +43,38 @@ parseVar = liftM NTmVar parseId
 
 -- | Trivial
 --
--- >>> parse parseBool "test" "Bool"
+-- >>> parse parseBoolTy "test" "Bool"
 -- Right TyBool
 --
-parseBool :: Parser Ty
-parseBool = string "Bool" >> return TyBool
+parseBoolTy :: Parser Ty
+parseBoolTy = string "Bool" >> return TyBool
 
 -- | Trivial?
 --
--- >>> parse parseArrow "test" "(Bool→Bool)"
+-- >>> parse parseArrowTy "test" "(Bool→Bool)"
 -- Right (TyArrow TyBool TyBool)
 -- 
--- >>> parse parseArrow "test" "((Bool→Bool) → (Bool→Bool))"
+-- >>> parse parseArrowTy "test" "((Bool→Bool) → (Bool→Bool))"
 -- Right (TyArrow (TyArrow TyBool TyBool) (TyArrow TyBool TyBool))
 -- 
-parseArrow :: Parser Ty
-parseArrow = char '(' >> spaces >> parseType >>= \t1 -> spaces >> char '→' >> spaces >> parseType >>= \t2 -> spaces >> char ')' >> return (TyArrow t1 t2)
+parseArrowTy :: Parser Ty
+parseArrowTy = char '(' >> spaces >> parseType >>= \t1 -> spaces >> char '→' >> spaces >> parseType >>= \t2 -> spaces >> char ')' >> return (TyArrow t1 t2)
 
 -- | Only types supported by simple typed calculus are Bool and Arrow.
 -- 
 parseType :: Parser Ty
-parseType = try parseBool <|> try parseArrow
+parseType = try parseBoolTy <|> try parseArrowTy
 
 -- | Catch type in abstraction, is only impact on syntax compated with untyped lambda calculus.
 -- 
--- >>> parse parseAbs "test" "λx:Bool.x"
+-- >>> parse parseAbsTerm "test" "λx:Bool.x"
 -- Right (NTmAbs "x" TyBool (NTmVar "x"))
 --
--- >>> parse parseAbs "test" "λx:(Bool→Bool).(λx:Bool.x)"
+-- >>> parse parseAbsTerm "test" "λx:(Bool→Bool).(λx:Bool.x)"
 -- Right (NTmAbs "x" (TyArrow TyBool TyBool) (NTmAbs "x" TyBool (NTmVar "x")))
 --
-parseAbs :: Parser NamedTerm
-parseAbs = char 'λ' >> spaces >> parseId >>= \n -> spaces >> char ':' >> spaces >> parseType >>= \t -> spaces >> char '.' >> spaces >> parseTerm >>= \e -> return $ NTmAbs n t e
+parseAbsTerm :: Parser NamedTerm
+parseAbsTerm = char 'λ' >> spaces >> parseId >>= \n -> spaces >> char ':' >> spaces >> parseType >>= \t -> spaces >> char '.' >> spaces >> parseTerm >>= \e -> return $ NTmAbs n t e
 
 -- | Parse according to parentheses.
 --
@@ -98,6 +98,25 @@ parseATerm = (char '(' >> parseTerm >>= \e -> char ')' >> spaces >> return e) <|
 parseAppTerm :: Parser NamedTerm
 parseAppTerm = liftM (foldl1 NTmApp) (many1 parseATerm)
 
+-- | Bools are either "t" or "f"
+--
+-- >>> parse parseBoolTerm "test" "t"
+-- Right NTmTrue
+--
+-- >>> parse parseBoolTerm "test" "f"
+-- Right NTmFalse
+--
+parseBoolTerm :: Parser NamedTerm
+parseBoolTerm = try (spaces >> char 't' >> return NTmTrue) <|> try (spaces >> char 'f' >> return NTmFalse)
+
+-- | If has three branches
+--
+-- >>> parse parseIfTerm "test" "I t t f"
+-- Right (NTmIf NTmTrue NTmTrue NTmFalse)
+--
+parseIfTerm :: Parser NamedTerm
+parseIfTerm = char 'I' >> parseTerm >>= \t1 -> parseTerm >>= \t2 -> parseTerm >>= \t3 -> return $ NTmIf t1 t2 t3
+
 -- | Parse a Term 
 -- 
 -- >>> parse parseTerm "lambda" "(λx:Bool.x)y"
@@ -107,7 +126,7 @@ parseAppTerm = liftM (foldl1 NTmApp) (many1 parseATerm)
 -- Right (NTmAbs "x" TyBool (NTmApp (NTmVar "x") (NTmVar "y")))
 --
 parseTerm :: Parser NamedTerm
-parseTerm = parseAppTerm <|> parseAbs
+parseTerm = try parseIfTerm <|> try parseBoolTerm <|> parseAppTerm <|> parseAbsTerm
 
 parseTermCommand :: Parser Command
 parseTermCommand = liftM TermCommand (spaces >> parseTerm) <?> "term command"

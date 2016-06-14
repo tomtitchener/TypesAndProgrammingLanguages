@@ -16,7 +16,7 @@ cabal-version:       >=1.10
 library
   hs-source-dirs:      src
   exposed-modules:     Untyped, Simple
-  other-modules:       Untyped.Data, Untyped.Eval, Untyped.Parse, Simple.Data
+  other-modules:       Untyped.Data, Untyped.Eval, Untyped.Parse, Simple.Data, Simple.Eval, Simple.Parse
   build-depends:       base >= 4.7 && < 5
                      , parsec
                      , containers
