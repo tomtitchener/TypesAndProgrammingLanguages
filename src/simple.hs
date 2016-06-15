@@ -3,8 +3,6 @@ module Simple (
   , UnnamedTerm(..)
   , Command(..)
   , parseCommands
-  , eval
-  , fullBetaEval
   , evalCommands
   ) where
 

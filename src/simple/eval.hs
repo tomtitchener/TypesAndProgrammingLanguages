@@ -3,15 +3,14 @@
 --}
 
 module Simple.Eval(
-    eval
-  , fullBetaEval
-  , evalCommands
+  evalCommands
   ) where
 
+import Data.Either
 import Data.Function                 (fix)
-import Data.List                     (elemIndices, sort, head, group, intersect, lookup, (\\))
+import Data.List                     (elemIndices, sort, head, group, intersect, lookup, (\\), find)
 import Data.Maybe                    (fromJust)
-import Data.Tree                     (Tree(..))
+import Data.Tree                     (Tree(..), flatten)
 import Simple.Data                   (Sym, Ty(..),NamedTerm(..), UnnamedTerm(..))
 import Simple.Parse                  (Command(..), parseCommands)
 import Text.ParserCombinators.Parsec (parse)
@@ -55,6 +54,40 @@ freeVars (NTmApp t1 t2)   = unique $ freeVars t1 ++ freeVars t2
 --   Traverse different paths under restore to regain unique naming context.
 --
 type Γ = Tree (Sym, Maybe Ty) -- TBD, infer type for all syms?
+
+-- | Test type is bool
+--
+testTyBool :: Ty -> Either String Ty
+testTyBool TyBool = Right TyBool
+testTyBool ty     = Left $ "type is not Bool " ++ show ty
+
+-- | Test type is arrow.
+--
+testTyArr :: Ty -> Either String Ty
+testTyArr ty@(TyArrow _ _) = Right ty
+testTyArr ty               = Left $ "type " ++ show ty ++ " is not TyArr"
+
+-- | Test types are equal
+--
+testTysEqual :: Ty -> Ty -> Either String Ty
+testTysEqual ty1 ty2 = if ty1 == ty2 then Right ty1 else Left $ "unequal types " ++ show ty1 ++ " and " ++ show ty2
+
+-- | Validate first arg is arrow type and that first type in arrow is equal to type of second arg.
+--   Answer second type in arrow, which will be return type for app.
+--
+testTyArg :: Ty -> Ty -> Either String Ty
+testTyArg arr@(TyArrow fr to) fr' = if fr == fr' then Right to else Left $"arg type " ++ show fr' ++ " not equal to input for arrow type " ++ show arr
+testTyArg ty _ = Left $ "testTyArg first arg " ++ show ty ++ " not arrow"
+
+-- | Given context, walk term answering either error string about type mismatch somewhere in term or type of term.
+--
+checkTypes :: (Γ, NamedTerm) -> Either String Ty
+checkTypes (_,   NTmTrue)        = Right TyBool
+checkTypes (_,   NTmFalse)       = Right TyBool
+checkTypes (ctx, NTmIf t1 t2 t3) = checkTypes (ctx,t1) >>= testTyBool >> checkTypes (ctx,t2) >>= \ty2 -> checkTypes (ctx,t3) >>= \ty3 -> testTysEqual ty2 ty3 >>= return 
+checkTypes (ctx, NTmVar s)       = Right . fromJust . snd . fromJust . find ((== s) . fst) $ flatten ctx
+checkTypes (ctx, NTmAbs s fr t)  = checkTypes (ctx',t) >>= \to -> Right (TyArrow fr to) >>= return where ctx' = Node (s,Just fr) [ctx]
+checkTypes (ctx, NTmApp t1 t2)   = checkTypes (ctx,t1) >>= testTyArr >>= \arr -> checkTypes (ctx,t2) >>= testTyArg arr >>= return
 
 -- | Convert 'NamedTerm' to pair of context 'Γ' and (unnamed) 'UnnamedTerm' for free vars ['Sym'],
 --   being careful to first check all free vars in NamedTerm are included in list.
