@@ -1,9 +1,10 @@
 module Main where
 
-import Prelude                       hiding (readFile)
-import System.Environment            (getArgs)
-import Text.ParserCombinators.Parsec (parse, parseFromFile)
-import Untyped                       (EvalStrategy, parseCommands, evalCommands, callByValEval, fullBetaEval)
+import           Prelude                       hiding (readFile)
+import           System.Environment            (getArgs)
+import           Text.ParserCombinators.Parsec (parse, parseFromFile)
+import qualified Simple as S                   (EvalStrategy, parseCommands, evalCommands, fullBetaEval) 
+import qualified Untyped as U                  (EvalStrategy, parseCommands, evalCommands, callByValEval, fullBetaEval) 
 
 -- | Parser for file with list of lines, converted to [Command], which then gets
 --   split into environment with assoc list of sym with term and a list of terms
@@ -14,27 +15,27 @@ import Untyped                       (EvalStrategy, parseCommands, evalCommands,
 --   (id id);
 --   @
 --
---   See "test" for examples.  Use this function in ghci to run file by hand:  @λ: readFile' "foo.l"@.
+--   See "test" for examples.  Use this function in ghci to run file by hand:  @λ: readFileUnnamed "foo.l"@.
 --
--- >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (evalCommands callByValEval cmds)) (parse parseCommands "lambda" "id = λx.x;\n(id id);\n")
+-- >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (U.evalCommands U.callByValEval cmds)) (parse U.parseCommands "lambda" "id = λx.x;\n(id id);\n")
 -- id
 --
 --    
--- >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (evalCommands fullBetaEval cmds)) (parse parseCommands "lambda" "id = λx.x;\n(id id);\n")
+-- >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (U.evalCommands U.fullBetaEval cmds)) (parse U.parseCommands "lambda" "id = λx.x;\n(id id);\n")
 -- id
 --
 --
-readFile' :: EvalStrategy -> String -> IO ()
-readFile' strat fName = parseFromFile parseCommands fName >>= either print (mapM_ putStrLn . evalCommands strat)
+readFileUnnamed :: U.EvalStrategy -> String -> IO ()
+readFileUnnamed strat fName = parseFromFile U.parseCommands fName >>= either print (mapM_ putStrLn . U.evalCommands strat)
 
 -- | Expects file name as single command-line argument.
 -- 
-readFile :: EvalStrategy -> IO ()
-readFile strat = getArgs >>= readFile' strat . head
+readForFileUnnamed :: U.EvalStrategy -> IO ()
+readForFileUnnamed strat = getArgs >>= readFileUnnamed strat . head
 
 -- | Church booleans
 --
--- >>> readFile' fullBetaEval "./test/bool.l"
+-- >>> readFileUnnamed U.fullBetaEval "./test/bool.l"
 -- l
 -- m
 -- tru
@@ -52,7 +53,7 @@ readFile strat = getArgs >>= readFile' strat . head
 --
 -- | Church numerals
 --
--- >>> readFile' fullBetaEval "./test/num.l"
+-- >>> readFileUnnamed U.fullBetaEval "./test/num.l"
 -- one
 -- one
 -- zero
@@ -86,10 +87,10 @@ readFile strat = getArgs >>= readFile' strat . head
 --
 -- | Recursion
 -- 
--- >>> readFile' fullBetaEval "./test/recur.l"
+-- >>> readFileUnnamed U.fullBetaEval "./test/recur.l"
 -- omega
 -- twentyfour
 --
 main :: IO ()
-main = readFile fullBetaEval
+main = readForFileUnnamed U.fullBetaEval
 

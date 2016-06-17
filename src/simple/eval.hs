@@ -4,6 +4,8 @@
 
 module Simple.Eval(
   evalCommands
+  , EvalStrategy
+  , fullBetaEval
   ) where
 
 import Control.Monad                 (foldM, liftM)
