@@ -119,10 +119,10 @@ parseIfTerm = char 'I' >> parseTerm >>= \t1 -> parseTerm >>= \t2 -> parseTerm >>
 
 -- | Parse a Term 
 -- 
--- >>> parse parseTerm "lambda" "(λx:Bool.x)y"
+-- >>> parse parseTerm "simple" "(λx:Bool.x)y"
 -- Right (NTmApp (NTmAbs "x" TyBool (NTmVar "x")) (NTmVar "y"))
 --
--- >>> parse parseTerm "lambda" "λx:Bool.x y"
+-- >>> parse parseTerm "simple" "λx:Bool.x y"
 -- Right (NTmAbs "x" TyBool (NTmApp (NTmVar "x") (NTmVar "y")))
 --
 parseTerm :: Parser NamedTerm
@@ -137,6 +137,17 @@ parseBinderCommand = spaces >> parseId >>= \i -> spaces >> char '=' >> spaces >>
 parseComment :: Parser Command
 parseComment = spaces >> char '#' >> many (noneOf "\n") >> return Comment <?> "comment"
 
+-- | Parse either binder or term command
+--
+-- >>> parse parseCommand "simple" "id = (λx:Bool.x);"
+-- Right (BinderCommand "id" (NTmAbs "x" TyBool (NTmVar "x")))
+--
+-- >>> parse parseCommand "simple" "(a b)"
+-- Right (TermCommand (NTmApp (NTmVar "a") (NTmVar "b")))
+--
+-- >>> parse parseCommand "simple" "(id (id (t)))"
+-- Right (TermCommand (NTmApp (NTmVar "id") (NTmApp (NTmVar "id") NTmTrue)))
+--
 parseCommand :: Parser Command
 parseCommand = try parseBinderCommand <|> try parseTermCommand <|> try parseComment <?> "command"
 
@@ -163,4 +174,3 @@ parseCommand = try parseBinderCommand <|> try parseTermCommand <|> try parseComm
 --
 parseCommands :: Parser [Command]
 parseCommands = parseCommand `endBy` choice [eof, void newline, char ';' >> void newline]
-

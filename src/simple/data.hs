@@ -54,8 +54,8 @@ data NamedTerm =
 --  (λx:Bool.x x)
 --
 instance Pretty NamedTerm where
-  pretty NTmTrue          = string "True"
-  pretty NTmFalse         = string "False"
+  pretty NTmTrue          = char 't'
+  pretty NTmFalse         = char 'f'
   pretty (NTmIf t1 t2 t3) = string "If " <> pretty t1 <> string " then " <> pretty t2 <> string " else " <> pretty t3 
   pretty (NTmVar s)       = string s
   pretty (NTmAbs n ty t)  = string "λ" <> string n <> char ':' <> pretty ty <> char '.' <> pretty t
@@ -82,8 +82,8 @@ data UnnamedTerm =
 --   (λ.0 0)
 --
 instance Pretty UnnamedTerm where
-  pretty UTmTrue          = string "True"
-  pretty UTmFalse         = string "False"
+  pretty UTmTrue          = char 't'
+  pretty UTmFalse         = char 't'
   pretty (UTmIf t1 t2 t3) = string "If " <> pretty t1 <> string " then " <> pretty t2 <> string " else " <> pretty t3 
   pretty (UTmVar i)       = int i
   pretty (UTmAbs t)       = string "λ." <> pretty t

@@ -6,10 +6,12 @@ module Simple.Eval(
   evalCommands
   ) where
 
+import Control.Monad                 (foldM, liftM)
 import Data.Either
+import Data.Either.Utils             (maybeToEither)
 import Data.Function                 (fix)
 import Data.List                     (elemIndices, sort, head, group, intersect, lookup, (\\), find)
-import Data.Maybe                    (fromJust)
+import Data.Maybe                    (fromJust, mapMaybe)
 import Data.Tree                     (Tree(..), flatten)
 import Simple.Data                   (Sym, Ty(..),NamedTerm(..), UnnamedTerm(..))
 import Simple.Parse                  (Command(..), parseCommands)
@@ -55,6 +57,14 @@ freeVars (NTmApp t1 t2)   = unique $ freeVars t1 ++ freeVars t2
 --
 type Γ = Tree (Sym, Maybe Ty) -- TBD, infer type for all syms?
 
+---------------------------
+-- Checking Simple Types --
+---------------------------
+
+-- | Type conctext is an association list of type by symbol.
+-- 
+type Γ' = [(Sym, Ty)]
+
 -- | Test type is bool
 --
 testTyBool :: Ty -> Either String Ty
@@ -79,15 +89,38 @@ testTyArg :: Ty -> Ty -> Either String Ty
 testTyArg arr@(TyArrow fr to) fr' = if fr == fr' then Right to else Left $"arg type " ++ show fr' ++ " not equal to input for arrow type " ++ show arr
 testTyArg ty _ = Left $ "testTyArg first arg " ++ show ty ++ " not arrow"
 
+-- | Search for sym in context
+--
+checkIsSym :: Sym -> Γ' -> Either String Ty
+checkIsSym s ctx = maybeToEither ("missing sym for var " ++ show s ++ " in context " ++ show ctx) (lookup s ctx) 
+
 -- | Given context, walk term answering either error string about type mismatch somewhere in term or type of term.
 --
-checkTypes :: (Γ, NamedTerm) -> Either String Ty
-checkTypes (_,   NTmTrue)        = Right TyBool
-checkTypes (_,   NTmFalse)       = Right TyBool
-checkTypes (ctx, NTmIf t1 t2 t3) = checkTypes (ctx,t1) >>= testTyBool >> checkTypes (ctx,t2) >>= \ty2 -> checkTypes (ctx,t3) >>= \ty3 -> testTysEqual ty2 ty3 >>= return 
-checkTypes (ctx, NTmVar s)       = Right . fromJust . snd . fromJust . find ((== s) . fst) $ flatten ctx
-checkTypes (ctx, NTmAbs s fr t)  = checkTypes (ctx',t) >>= \to -> Right (TyArrow fr to) >>= return where ctx' = Node (s,Just fr) [ctx]
-checkTypes (ctx, NTmApp t1 t2)   = checkTypes (ctx,t1) >>= testTyArr >>= \arr -> checkTypes (ctx,t2) >>= testTyArg arr >>= return
+-- >>> checkTypes [] NTmTrue
+-- Right TyBool
+--
+-- >>> checkTypes [] NTmFalse
+-- Right TyBool
+--
+-- >>> checkTypes [] (NTmIf NTmTrue NTmTrue NTmFalse)
+-- Right TyBool
+--
+-- >>> checkTypes [] (NTmAbs "x" TyBool (NTmVar "x"))
+-- Right (TyArrow TyBool TyBool)
+--
+-- >>> checkTypes [] (NTmApp (NTmAbs "x" TyBool (NTmVar "x")) NTmTrue)
+-- Right TyBool
+--
+-- >>> checkTypes [] (NTmApp (NTmAbs "x" (TyArrow TyBool TyBool) (NTmVar "x")) (NTmAbs "x" TyBool (NTmVar "x")))
+-- Right (TyArrow TyBool TyBool)
+--
+checkTypes :: Γ' -> NamedTerm -> Either String Ty
+checkTypes _    NTmTrue         = Right TyBool
+checkTypes _    NTmFalse        = Right TyBool
+checkTypes ctx (NTmIf t1 t2 t3) = checkTypes ctx t1 >>= testTyBool >> checkTypes ctx t2 >>= \ty2 -> checkTypes ctx t3 >>= \ty3 -> testTysEqual ty2 ty3
+checkTypes ctx (NTmVar s)       = checkIsSym s ctx 
+checkTypes ctx (NTmAbs s fr t)  = liftM (TyArrow fr) (checkTypes ctx' t) where ctx' = (s, fr):ctx
+checkTypes ctx (NTmApp t1 t2)   = checkTypes ctx t1 >>= testTyArr >>= \arr -> checkTypes ctx t2 >>= testTyArg arr
 
 -- | Convert 'NamedTerm' to pair of context 'Γ' and (unnamed) 'UnnamedTerm' for free vars ['Sym'],
 --   being careful to first check all free vars in NamedTerm are included in list.
@@ -224,10 +257,10 @@ termSubst 0 (c1, s) t = walk 0 t
     walk :: Int -> (Γ,UnnamedTerm) -> (Γ,UnnamedTerm)
     walk c pr@(_,                      UTmTrue)      = pr
     walk c pr@(_,                      UTmFalse)     = pr
-    walk c (Node _ [ctx1, ctx2, ctx3], UTmIf t1 t2 t3) = ((Node ("", Nothing) [ctx1', ctx2', ctx3']), UTmIf t1' t2' t3') where (ctx1', t1') = walk c (ctx1, t1); (ctx2', t2') = walk c (ctx2, t2); (ctx3', t3') = walk c (ctx3, t3)
+    walk c (Node _ [ctx1, ctx2, ctx3], UTmIf t1 t2 t3) = (Node ("", Nothing) [ctx1', ctx2', ctx3'], UTmIf t1' t2' t3') where (ctx1', t1') = walk c (ctx1, t1); (ctx2', t2') = walk c (ctx2, t2); (ctx3', t3') = walk c (ctx3, t3)
     walk c pr@(_,                      UTmVar i)       = if i == 0 + c then (c1, termShift c s) else pr
     walk c (Node (x, ty) [ctx],        UTmAbs t1)      = (Node (x, ty) [ctx'], UTmAbs t2) where (ctx', t2) = walk (c+1) (ctx, t1)
-    walk c (Node _ [ctx1, ctx2],       UTmApp t1 t2)   = ((Node ("", Nothing) [ctx1', ctx2']), UTmApp t1' t2') where (ctx1', t1') = walk c (ctx1, t1); (ctx2', t2') = walk c (ctx2, t2)
+    walk c (Node _ [ctx1, ctx2],       UTmApp t1 t2)   = (Node ("", Nothing) [ctx1', ctx2'], UTmApp t1' t2') where (ctx1', t1') = walk c (ctx1, t1); (ctx2', t2') = walk c (ctx2, t2)
     walk c t = error $ "termSubst walk unexpected arg vals c " ++ show c ++ " t " ++ show t 
 termSubst n (_, s) t = error $ "termSubst called with non-zero index " ++ show n ++ " for terms s " ++ show s ++ " and t " ++ show t
 
@@ -255,8 +288,9 @@ type EvalStrategy = ((Γ,UnnamedTerm) -> (Γ,UnnamedTerm))
 --   this implementation interprets.  Either way, as this suffices to carry out arithmetic
 --   operations on Church numerals.
 --
---  >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (evalCommands fullBetaEval cmds)) (parse parseCommands "lambda" "id = (λx:Bool.x);\n(id (id (λz:Bool. id z)));\n")
---  λz:Bool.z
+--  >>> either (putStrLn . show) (\cmds -> mapM_ putStrLn (evalCommands fullBetaEval cmds)) (parse parseCommands "lambda" "id = (λx:Bool.x);\n(id (id (t)));\n")
+--  t
+--
 --
 fullBetaEval :: EvalStrategy
 fullBetaEval (Node _ [c1, c2], UTmApp t12@(UTmAbs _) t2) = βRed2 (c2,t2) (c1,t12)
@@ -328,9 +362,9 @@ unsubst e =
     unsubst' t@(NTmApp t1 t2)   = maybe t' NTmVar (lookup t e') where t' = NTmApp (unsubst' t1) (unsubst' t2)
 
 -- | Capture TermCommand in list, skip BinderCommand.
-termCommand2NamedTerms :: Command -> [NamedTerm]
-termCommand2NamedTerms (TermCommand t1) = [t1]
-termCommand2NamedTerms _                = []
+termCommand2MaybeNamedTerm :: Command -> Maybe NamedTerm
+termCommand2MaybeNamedTerm (TermCommand t1) = Just t1
+termCommand2MaybeNamedTerm _                = Nothing
 
 -- | Append contents for BinderCommand to list, skip TermCommand.
 --   Used to fold over BinderCommands in input file, where later
@@ -343,6 +377,10 @@ envAndBinderCommand2Env :: Env -> Command -> Env
 envAndBinderCommand2Env env (BinderCommand s t) = env ++ [(s, subst env (removeNames (map fst env) t))]
 envAndBinderCommand2Env env _ = env
 
+checkBinderTypes :: Γ' -> Command -> Either String Γ'
+checkBinderTypes env (BinderCommand s t) = checkTypes env t >>= \ty -> return $ env ++ [(s, ty)]
+checkBinderTypes env (TermCommand t)     = checkTypes env t >> return env
+
 -- | Given function that implements evaluation strategy in first argument, then 'Env' with global environment of
 --   assoc list of 'Sym' to 'UnnamedTerm' and 'NamedTerm', use 'Sym' from 'Env' for free vars to remove names from 'NamedTerm',
 --   creating tuple '(Γ,UnnamedTerm)', then evaluate the result and restore names using free vars and eval result.
@@ -353,11 +391,17 @@ evalNamedTerm strat env =
   where
     syms = map fst env
 
--- | Separate binders from terms in '[Command]' and then evaluate all terms using
+-- | Separate binders from terms in '[Command]' and then evaluate all ter ms using
 --   free vars with terms in binders and answer the list of resulting terms.
 --    
-evalCommands :: EvalStrategy -> [Command] -> [String]
-evalCommands strat cmds = map (show . pretty . evalNamedTerm strat env) terms
+evalCmds :: EvalStrategy -> [Command] -> [String]
+evalCmds strat cmds = map (show . pretty . evalNamedTerm strat env) terms
   where
-    env  = foldl envAndBinderCommand2Env [] cmds
-    terms = concatMap termCommand2NamedTerms cmds
+    env   = foldl envAndBinderCommand2Env [] cmds
+    terms = mapMaybe termCommand2MaybeNamedTerm cmds
+
+typeCheckCommands :: [Command] -> Either String Γ'
+typeCheckCommands = foldM checkBinderTypes [] 
+
+evalCommands :: EvalStrategy -> [Command] -> [String]
+evalCommands strat cmds = either (:[]) (\_ ->evalCmds strat cmds) $ typeCheckCommands cmds

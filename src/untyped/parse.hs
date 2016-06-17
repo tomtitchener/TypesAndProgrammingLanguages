@@ -82,6 +82,9 @@ parseAppTerm = liftM (foldl1 App) (many1 parseATerm)
 -- >>> parse parseTerm "lambda" "λx.x y"
 -- Right (Abs "x" (App (Var "x") (Var "y")))
 --
+-- >>> parse parseTerm "lambda" "(id (id t));"
+-- Right (App (Var "id") (App (Var "id") (Var "t")))
+--
 parseTerm :: Parser NamedλTerm
 parseTerm = parseAppTerm <|> parseAbs
 

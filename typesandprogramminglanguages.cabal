@@ -21,6 +21,7 @@ library
                      , parsec
                      , containers
                      , wl-pprint 
+                     , MissingH
   default-language:    Haskell2010
   
 executable typesandprogramminglanguages-exe
